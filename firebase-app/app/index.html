@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Firebase Tasks (Prototype)</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 20px; max-width: 900px; }
+      h1, h2 { font-size: 1.2rem; margin-top: 1.5rem; }
+      form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+             padding: 12px; background: #f6f8fa; border: 1px solid #e1e4e8;
+             border-radius: 6px; margin-bottom: 12px; }
+      form input, form select, form button { padding: 6px 8px; font-size: 0.9rem; }
+      form input[name="title"] { flex: 1; min-width: 220px; }
+      .editing-banner { color: #b08800; font-size: 0.85rem; }
+      #tasks .task, #history .entry {
+        padding: 8px; border-bottom: 1px solid #eee;
+        display: flex; gap: 8px; align-items: baseline;
+      }
+      #tasks .task button { margin-left: auto; }
+      .muted { color: #6a737d; font-size: 0.85rem; }
+      .pill { display: inline-block; padding: 1px 6px; border-radius: 10px;
+              font-size: 0.75rem; background: #eaecef; }
+      .diff { font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; }
+    </style>
+  </head>
+  <body>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <h1 style="margin:0;">Tasks</h1>
+      <button type="button" id="view-products-btn">View Products</button>
+      <button type="button" id="view-pg-history-btn">View History (Postgres)</button>
+    </div>
+
+    <dialog id="products-dialog" style="min-width:420px; border:1px solid #d0d7de; border-radius:8px; padding:0;">
+      <form method="dialog" style="margin:0; background:#f6f8fa; border-bottom:1px solid #e1e4e8;
+                                    padding:8px 12px; display:flex; align-items:center; gap:8px;">
+        <strong style="flex:1;">Products</strong>
+        <button value="close">Close</button>
+      </form>
+      <div id="products" style="padding:12px;">Loading…</div>
+    </dialog>
+
+    <dialog id="pg-history-dialog" style="min-width:560px; max-width:90vw; border:1px solid #d0d7de; border-radius:8px; padding:0;">
+      <form method="dialog" style="margin:0; background:#f6f8fa; border-bottom:1px solid #e1e4e8;
+                                    padding:8px 12px; display:flex; align-items:center; gap:8px;">
+        <strong style="flex:1;">Task History (replicated to Postgres via Pub/Sub)</strong>
+        <button value="close">Close</button>
+      </form>
+      <div id="pg-history" style="padding:12px; max-height:60vh; overflow:auto;">Loading…</div>
+    </dialog>
+
+    <form id="task-form">
+      <input name="title" placeholder="Title" required />
+      <select name="status">
+        <option value="open">open</option>
+        <option value="in-progress">in-progress</option>
+        <option value="blocked">blocked</option>
+        <option value="done">done</option>
+      </select>
+      <select name="priority">
+        <option value="low">low</option>
+        <option value="medium" selected>medium</option>
+        <option value="high">high</option>
+      </select>
+      <button type="submit" id="submit-btn">Add Task</button>
+      <button type="button" id="cancel-btn" hidden>Cancel</button>
+      <span id="editing-banner" class="editing-banner" hidden></span>
+    </form>
+
+    <h2>Top 50 Tasks</h2>
+    <div id="tasks">Loading…</div>
+
+    <h2>Task History (live)</h2>
+    <div id="history">Subscribing…</div>
+
+    <script type="module" src="./main.js?v=5"></script>
+  </body>
+</html>

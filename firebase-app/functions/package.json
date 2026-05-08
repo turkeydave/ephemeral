@@ -1,0 +1,12 @@
+{
+  "name": "firebase-functions",
+  "private": true,
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "@google-cloud/pubsub": "^4.7.0",
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^6.0.0"
+  }
+}

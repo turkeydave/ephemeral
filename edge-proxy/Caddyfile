@@ -1,0 +1,40 @@
+# VM-side edge proxy.
+#
+# Listens on :8080 (the only port the VM exposes to the gateway). Routes
+# requests by Host header:
+#   <env>-app.*  -> app    (nginx, port 80)
+#   <env>-api.*  -> api    (express, port 3001)
+#
+# /healthz is served unconditionally for the gateway readiness check.
+#
+# Logging is on so we can see what hostnames the gateway is sending.
+
+{
+	admin off
+	auto_https off
+	log {
+		output stdout
+		format console
+	}
+}
+
+:8080 {
+	@app host *-app.*
+	@api host *-api.*
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle @app {
+		reverse_proxy app:80
+	}
+
+	handle @api {
+		reverse_proxy api:3001
+	}
+
+	handle {
+		respond "edge-proxy: no host match (expected *-app.* or *-api.*)" 404
+	}
+}

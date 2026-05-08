@@ -1,0 +1,15 @@
+{
+  "name": "pubsub-relay",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google-cloud/pubsub": "^4.7.0"
+  }
+}

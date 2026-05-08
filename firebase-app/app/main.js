@@ -1,0 +1,269 @@
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js';
+import {
+  getFirestore,
+  connectFirestoreEmulator,
+  collection,
+  doc,
+  query,
+  orderBy,
+  limit,
+  getDocs,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  serverTimestamp
+} from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js';
+
+// TODO: Replace with your Firebase config
+const firebaseConfig = {
+  apiKey: "[REDACTED:google-api-key]",
+  authDomain: "project-4b04c9cf-520a-4693-86a.firebaseapp.com",
+  projectId: "project-4b04c9cf-520a-4693-86a",
+  storageBucket: "project-4b04c9cf-520a-4693-86a.firebasestorage.app",
+  messagingSenderId: "80449270535",
+  appId: "1:80449270535:web:dd9d285dada9895f3f0ba2"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+  try {
+    connectFirestoreEmulator(db, 'localhost', 8080);
+    console.info('Firestore emulator connected at localhost:8080');
+  } catch (e) {
+    console.warn('Could not connect to Firestore emulator:', e && e.message ? e.message : e);
+  }
+}
+
+// ----- API base (Express + Postgres service) -----
+const API_BASE = 'http://localhost:3001';
+
+// ----- DOM -----
+const tasksEl = document.getElementById('tasks');
+const historyEl = document.getElementById('history');
+const form = document.getElementById('task-form');
+const submitBtn = document.getElementById('submit-btn');
+const cancelBtn = document.getElementById('cancel-btn');
+const editingBanner = document.getElementById('editing-banner');
+const viewProductsBtn = document.getElementById('view-products-btn');
+const productsDialog = document.getElementById('products-dialog');
+const productsEl = document.getElementById('products');
+const viewPgHistoryBtn = document.getElementById('view-pg-history-btn');
+const pgHistoryDialog = document.getElementById('pg-history-dialog');
+const pgHistoryEl = document.getElementById('pg-history');
+
+let editingId = null;
+
+// ----- Tasks list (one-shot, refreshed after add/edit) -----
+async function loadTasks() {
+  tasksEl.textContent = 'Loading…';
+  const q = query(collection(db, 'tasks'), orderBy('updatedAt', 'desc'), limit(50));
+  const snap = await getDocs(q);
+  if (snap.empty) {
+    tasksEl.textContent = 'No tasks found.';
+    return;
+  }
+  tasksEl.innerHTML = '';
+  snap.forEach(d => tasksEl.appendChild(renderTaskRow(d.id, d.data())));
+}
+
+function renderTaskRow(id, data) {
+  const row = document.createElement('div');
+  row.className = 'task';
+  row.innerHTML = `
+    <strong>${escapeHtml(data.title || '(untitled)')}</strong>
+    <span class="pill">${escapeHtml(data.status || '')}</span>
+    <span class="pill">${escapeHtml(data.priority || '')}</span>
+    <span class="muted">${escapeHtml(id)}</span>
+  `;
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.textContent = 'Edit';
+  editBtn.addEventListener('click', () => beginEdit(id, data));
+  row.appendChild(editBtn);
+  return row;
+}
+
+// ----- Add / Edit -----
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(form);
+  const payload = {
+    title: (fd.get('title') || '').toString().trim(),
+    status: fd.get('status'),
+    priority: fd.get('priority'),
+    updatedAt: serverTimestamp()
+  };
+  if (!payload.title) return;
+
+  try {
+    submitBtn.disabled = true;
+    if (editingId) {
+      await updateDoc(doc(db, 'tasks', editingId), payload);
+    } else {
+      payload.createdAt = serverTimestamp();
+      await addDoc(collection(db, 'tasks'), payload);
+    }
+    resetForm();
+    await loadTasks();
+  } catch (err) {
+    alert('Save failed: ' + err.message);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+cancelBtn.addEventListener('click', resetForm);
+
+function beginEdit(id, data) {
+  editingId = id;
+  form.title.value = data.title || '';
+  form.status.value = data.status || 'open';
+  form.priority.value = data.priority || 'medium';
+  submitBtn.textContent = 'Save Task';
+  cancelBtn.hidden = false;
+  editingBanner.hidden = false;
+  editingBanner.textContent = `editing ${id}`;
+  form.title.focus();
+}
+
+function resetForm() {
+  editingId = null;
+  form.reset();
+  submitBtn.textContent = 'Add Task';
+  cancelBtn.hidden = true;
+  editingBanner.hidden = true;
+  editingBanner.textContent = '';
+}
+
+// ----- Task History (live) -----
+function subscribeHistory() {
+  const q = query(collection(db, 'taskHistory'), orderBy('updatedAt', 'desc'), limit(50));
+  onSnapshot(q, (snap) => {
+    if (snap.empty) {
+      historyEl.textContent = 'No history yet.';
+      return;
+    }
+    historyEl.innerHTML = '';
+    snap.forEach(d => historyEl.appendChild(renderHistoryEntry(d.id, d.data())));
+  }, (err) => {
+    historyEl.textContent = 'History subscription error: ' + err.message;
+  });
+}
+
+function renderHistoryEntry(id, data) {
+  const row = document.createElement('div');
+  row.className = 'entry';
+  const ts = data.updatedAt && data.updatedAt.toDate
+    ? data.updatedAt.toDate().toISOString().replace('T', ' ').slice(0, 19)
+    : '—';
+  const diffs = computeDiffs(data.before || {}, data.after || {});
+  row.innerHTML = `
+    <span class="muted">${escapeHtml(ts)}</span>
+    <span class="pill">${escapeHtml(data.op || 'update')}</span>
+    <strong>${escapeHtml(data.taskId || '')}</strong>
+    <span class="diff">${diffs.length ? diffs.map(escapeHtml).join(' · ') : '(no field changes)'}</span>
+  `;
+  return row;
+}
+
+function computeDiffs(before, after) {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const out = [];
+  for (const k of keys) {
+    const a = format(before[k]);
+    const b = format(after[k]);
+    if (a !== b) out.push(`${k}: ${a} → ${b}`);
+  }
+  return out;
+}
+
+function format(v) {
+  if (v == null) return '∅';
+  if (typeof v === 'object' && v.toDate) return v.toDate().toISOString();
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ----- Products (loaded from Express API on demand) -----
+async function loadProducts() {
+  productsEl.textContent = 'Loading…';
+  try {
+    const res = await fetch(`${API_BASE}/products`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { products } = await res.json();
+    if (!products || !products.length) {
+      productsEl.textContent = 'No products.';
+      return;
+    }
+    productsEl.innerHTML = '';
+    for (const p of products) {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:8px 0; border-bottom:1px solid #eee;';
+      row.innerHTML = `
+        <div><strong>${escapeHtml(p.name)}</strong>
+          <span class="pill">$${escapeHtml(p.price)}</span></div>
+        <div class="muted">${escapeHtml(p.description || '')}</div>
+      `;
+      productsEl.appendChild(row);
+    }
+  } catch (err) {
+    productsEl.textContent = 'Failed to load products: ' + err.message;
+  }
+}
+
+viewProductsBtn.addEventListener('click', () => {
+  productsDialog.showModal();
+  loadProducts();
+});
+
+// ----- Postgres-replicated task history (loaded from API on demand) -----
+async function loadPgHistory() {
+  pgHistoryEl.textContent = 'Loading…';
+  try {
+    const res = await fetch(`${API_BASE}/history`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { history } = await res.json();
+    if (!history || !history.length) {
+      pgHistoryEl.textContent = 'No replicated history rows yet.';
+      return;
+    }
+    pgHistoryEl.innerHTML = '';
+    for (const h of history) {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:6px 0; border-bottom:1px solid #eee;';
+      const occurred = h.occurred_at ? new Date(h.occurred_at).toISOString().replace('T', ' ').slice(0, 19) : '—';
+      const diffs = computeDiffs(h.before_data || {}, h.after_data || {});
+      row.innerHTML = `
+        <div>
+          <span class="muted">${escapeHtml(occurred)}</span>
+          <span class="pill">${escapeHtml(h.op || '')}</span>
+          <strong>${escapeHtml(h.task_id || '')}</strong>
+          <span class="muted">#${h.id}</span>
+        </div>
+        <div class="diff">${diffs.length ? diffs.map(escapeHtml).join(' · ') : '(no field changes)'}</div>
+      `;
+      pgHistoryEl.appendChild(row);
+    }
+  } catch (err) {
+    pgHistoryEl.textContent = 'Failed to load Postgres history: ' + err.message;
+  }
+}
+
+viewPgHistoryBtn.addEventListener('click', () => {
+  pgHistoryDialog.showModal();
+  loadPgHistory();
+});
+
+// ----- boot -----
+loadTasks().catch(err => { tasksEl.textContent = 'Error loading tasks: ' + err.message; });
+subscribeHistory();

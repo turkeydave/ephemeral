@@ -1,0 +1,95 @@
+version: '3.8'
+services:
+  firebase-emulator:
+    build: ./firebase-emulator
+    environment:
+      - FIREBASE_PROJECT=${FIREBASE_PROJECT}
+      # Must match projectId in firebase-app/app/main.js (and .firebaserc),
+      # otherwise Firestore triggers register against the wrong project.
+      - GCLOUD_PROJECT=${FIREBASE_PROJECT}
+      # Functions discovery (loading index.js + introspecting exports) can be
+      # slow on first run; default 10s isn't enough.
+      - FUNCTIONS_DISCOVERY_TIMEOUT=60
+      # The pubsub emulator runs in this same container, so the functions
+      # runtime reaches it on localhost.
+      - PUBSUB_EMULATOR_HOST=localhost:8085
+      # Where the emulators import from at startup and export to on shutdown.
+      - EMULATOR_DATA_DIR=/workspace/emulator-data
+    volumes:
+      - ./:/workspace:rw
+    ports:
+      - "8080:8080" # Firestore
+      - "5001:5001" # Functions
+      - "8085:8085" # Pub/Sub
+      - "4000:4000" # Emulator UI
+    stop_grace_period: 30s
+    command: ["--project", "${FIREBASE_PROJECT}"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=ephemeral
+      - POSTGRES_PASSWORD=ephemeral
+      - POSTGRES_DB=ephemeral
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ephemeral -d ephemeral"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./api
+    environment:
+      - PORT=3001
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=ephemeral
+      - PGPASSWORD=ephemeral
+      - PGDATABASE=ephemeral
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    # Bind-mount the source so the agentic runner / previewer can pull new
+    # code and restart the container without rebuilding the image. The
+    # anonymous volume on /app/node_modules preserves deps installed in the
+    # image so the bind-mount doesn't blow them away.
+    volumes:
+      - ./api:/app
+      - /app/node_modules
+    command: ["node", "index.js"]
+    restart: unless-stopped
+
+  app:
+    image: nginx:alpine
+    volumes:
+      - ./firebase-app/app:/usr/share/nginx/html:ro
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+  pubsub-relay:
+    build: ./pubsub-relay
+    environment:
+      - GCLOUD_PROJECT=${FIREBASE_PROJECT}
+      - PUBSUB_EMULATOR_HOST=firebase-emulator:8085
+      - PUBSUB_TOPIC=taskHistory
+      - PUBSUB_SUBSCRIPTION=taskHistory-relay-sub
+      - PUSH_URL=http://api:3001/events/task-history
+    depends_on:
+      - firebase-emulator
+      - api
+    volumes:
+      - ./pubsub-relay:/app
+      - /app/node_modules
+    command: ["node", "index.js"]
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

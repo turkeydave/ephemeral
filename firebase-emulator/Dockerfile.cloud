@@ -1,0 +1,45 @@
+# Cloud build of the firebase emulator with everything baked in.
+#
+# Build context MUST be the repo root (so we can COPY files from
+# firebase-app/, emulator-data/, firebase.json, .firebaserc):
+#   docker build -f firebase-emulator/Dockerfile.cloud -t <ref> .
+#
+# Differences from the local Dockerfile:
+#   - functions deps installed at build time (not at container start)
+#   - emulator-data/ is COPYed in at /seed/emulator-data
+#   - firebase project files (firebase.json, .firebaserc, functions
+#     source) are COPYed in instead of being bind-mounted from /workspace
+#   - no npm install on startup
+
+FROM eclipse-temurin:21-jre
+
+RUN apt-get update && apt-get install -y curl ca-certificates gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g firebase-tools@latest && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# Firebase project skeleton
+COPY firebase.json /workspace/firebase.json
+COPY .firebaserc   /workspace/.firebaserc
+
+# Pre-install functions deps. Done in two layers so source-only changes
+# don't bust the npm install cache.
+COPY firebase-app/functions/package.json /workspace/firebase-app/functions/package.json
+RUN cd /workspace/firebase-app/functions && npm install --no-audit --no-fund
+
+# Functions source (changes most often)
+COPY firebase-app/functions/index.js /workspace/firebase-app/functions/index.js
+
+# Bake in the seeded emulator export at a stable path
+COPY emulator-data/ /seed/emulator-data/
+ENV EMULATOR_DATA_DIR=/seed/emulator-data
+
+EXPOSE 8080 5001 8085 4000
+
+COPY firebase-emulator/start-emulators.sh /usr/local/bin/start-emulators.sh
+RUN chmod +x /usr/local/bin/start-emulators.sh
+
+ENTRYPOINT ["sh", "/usr/local/bin/start-emulators.sh"]

@@ -1,0 +1,70 @@
+# Cloud variant of docker-compose.yml.
+#
+# Designed to run on a Compute Engine VM. All images are pulled from
+# Artifact Registry (built locally and pushed by scripts/build-and-push.ps1).
+# No host bind-mounts. The only port exposed to the host (and therefore
+# to the VPC) is :8080 on the edge proxy — the gateway forwards there.
+#
+# Required env (passed via .env on the VM, written by the startup script):
+#   REGISTRY            us-central1-docker.pkg.dev/<project>/ephemeral-runner
+#   TAG                 image tag for this rollout (e.g. m1-abcdef0)
+#   FIREBASE_PROJECT    must match the projectId in firebase-app/app/main.js
+
+services:
+  postgres:
+    image: ${REGISTRY}/postgres-seeded:${TAG}
+    environment:
+      - POSTGRES_USER=ephemeral
+      - POSTGRES_PASSWORD=ephemeral
+      - POSTGRES_DB=ephemeral
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ephemeral -d ephemeral"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  firebase-emulator:
+    image: ${REGISTRY}/firebase-emulator-seeded:${TAG}
+    environment:
+      - FIREBASE_PROJECT=${FIREBASE_PROJECT}
+      - GCLOUD_PROJECT=${FIREBASE_PROJECT}
+      - FUNCTIONS_DISCOVERY_TIMEOUT=60
+      - PUBSUB_EMULATOR_HOST=localhost:8085
+      # EMULATOR_DATA_DIR is baked into the image (=/seed/emulator-data).
+    stop_grace_period: 30s
+
+  api:
+    image: ${REGISTRY}/api:${TAG}
+    environment:
+      - PORT=3001
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=ephemeral
+      - PGPASSWORD=ephemeral
+      - PGDATABASE=ephemeral
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    image: ${REGISTRY}/app:${TAG}
+
+  pubsub-relay:
+    image: ${REGISTRY}/pubsub-relay:${TAG}
+    environment:
+      - GCLOUD_PROJECT=${FIREBASE_PROJECT}
+      - PUBSUB_EMULATOR_HOST=firebase-emulator:8085
+      - PUBSUB_TOPIC=taskHistory
+      - PUBSUB_SUBSCRIPTION=taskHistory-relay-sub
+      - PUSH_URL=http://api:3001/events/task-history
+    depends_on:
+      - firebase-emulator
+      - api
+
+  edge-proxy:
+    image: ${REGISTRY}/edge-proxy:${TAG}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - app
+      - api

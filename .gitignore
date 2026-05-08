@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment / local config
+.env
+.env.local
+.env.*.local
+
+# Firebase emulator
+firebase-debug.log
+firestore-debug.log
+pubsub-debug.log
+ui-debug.log
+*-debug.log
+emulator-data/
+# Note: firebase-emulator/Dockerfile.cloud COPYs emulator-data/ into the
+# baked image. Anyone building cloud images needs to run the local stack
+# at least once (docker compose up -> ... -> docker compose down) to
+# generate this directory before .\scripts\build-and-push.ps1 will succeed.
+
+# Build / runtime artifacts
+dist/
+build/
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Local docker overrides (keep docker-compose.yml + docker-compose.cloud.yml committed)
+docker-compose.override.yml
+
+# Terraform — infra/ lives outside this repo, but in case anyone drops state in here
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+crash.log
+
+# npm
+package-lock.json.bak
+.npm/
+
+# Misc
+*.tmp
+*.bak
