@@ -1,9 +1,23 @@
 # Cloud variant of docker-compose.yml.
 #
-# Designed to run on a Compute Engine VM. All images are pulled from
-# Artifact Registry (built locally and pushed by scripts/build-and-push.ps1).
-# No host bind-mounts. The only port exposed to the host (and therefore
-# to the VPC) is :8080 on the edge proxy — the gateway forwards there.
+# Designed to run on a Compute Engine VM after the startup script clones
+# this repo to /srv/ephemeral and runs `docker compose -f
+# docker-compose.cloud.yml up -d` from there.
+#
+# Service split:
+#
+#   - postgres / firebase-emulator / pubsub-relay / edge-proxy
+#       => pulled from Artifact Registry as immutable, prebuilt images.
+#          (built+pushed by scripts/build-and-push.ps1)
+#
+#   - app / api
+#       => built on the VM from the cloned repo, with the source bind-
+#          mounted in. This is the agent-editable surface: the runner
+#          mutates files under /srv/ephemeral/{app,api} and restarts the
+#          container; no image rebuild/push needed.
+#
+# The only port exposed to the host (and therefore to the VPC) is :8080
+# on the edge proxy — the gateway forwards there.
 #
 # Required env (passed via .env on the VM, written by the startup script):
 #   REGISTRY            us-central1-docker.pkg.dev/<project>/ephemeral-runner
@@ -15,7 +29,7 @@ services:
     image: ${REGISTRY}/postgres-seeded:${TAG}
     environment:
       - POSTGRES_USER=ephemeral
-      - POSTGRES_PASSWORD=ephemeral
+      - POSTGRES_PASSWORD=[REDACTED:password]
       - POSTGRES_DB=ephemeral
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ephemeral -d ephemeral"]
@@ -34,20 +48,32 @@ services:
     stop_grace_period: 30s
 
   api:
-    image: ${REGISTRY}/api:${TAG}
+    # Agent-editable: built on the VM from the cloned repo with source
+    # bind-mounted in (matches local docker-compose.yml shape).
+    build: ./api
     environment:
       - PORT=3001
       - PGHOST=postgres
       - PGPORT=5432
       - PGUSER=ephemeral
-      - PGPASSWORD=ephemeral
+      - PGPASSWORD=[REDACTED:password]
       - PGDATABASE=ephemeral
+    volumes:
+      - ./api:/app
+      - /app/node_modules
+    command: ["node", "index.js"]
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
 
   app:
-    image: ${REGISTRY}/app:${TAG}
+    # Agent-editable: nginx serving the bind-mounted static site directly
+    # from the cloned repo (matches local docker-compose.yml shape).
+    image: nginx:alpine
+    volumes:
+      - ./firebase-app/app:/usr/share/nginx/html:ro
+    restart: unless-stopped
 
   pubsub-relay:
     image: ${REGISTRY}/pubsub-relay:${TAG}

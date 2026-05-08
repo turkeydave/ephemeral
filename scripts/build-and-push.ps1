@@ -1,8 +1,19 @@
 <#
 .SYNOPSIS
-  Build and push all six ephemeral-runner images to Artifact Registry.
+  Build and push the four "platform" ephemeral-runner images to Artifact Registry.
 
 .DESCRIPTION
+  Builds and pushes the immutable, agent-non-editable services:
+    - postgres-seeded
+    - firebase-emulator-seeded
+    - pubsub-relay
+    - edge-proxy
+
+  The mutable services (`app`, `api`) are NOT built into images. Each VM
+  clones this repo at startup and `docker-compose.cloud.yml` builds those
+  two services on the VM with bind-mounts against the cloned source, so
+  the agent runner can edit them in place.
+
   Tags every image with the same tag (default: m1-<short git sha>) so the
   whole stack versions together. Run from the repo root.
 
@@ -36,9 +47,11 @@ Write-Host "Tag     : $Tag"      -ForegroundColor Cyan
 Write-Host ""
 
 # name | dockerfile (relative to repo root) | build context (relative to repo root)
+#
+# Only the platform images are built+pushed here. `app` and `api` are
+# agent-editable and are built on the VM by docker-compose.cloud.yml
+# against the cloned repo (see docker-compose.cloud.yml).
 $Images = @(
-  @{ Name = "app";                        Dockerfile = "firebase-app/app/Dockerfile";     Context = "firebase-app/app" },
-  @{ Name = "api";                        Dockerfile = "api/Dockerfile";                  Context = "api" },
   @{ Name = "pubsub-relay";               Dockerfile = "pubsub-relay/Dockerfile";         Context = "pubsub-relay" },
   @{ Name = "postgres-seeded";            Dockerfile = "postgres/Dockerfile";             Context = "postgres" },
   @{ Name = "firebase-emulator-seeded";   Dockerfile = "firebase-emulator/Dockerfile.cloud"; Context = "." },

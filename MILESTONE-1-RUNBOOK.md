@@ -14,7 +14,7 @@ Per [POC-Implementation-Plan.md §9 Milestone 1](./POC-Implementation-Plan.md#mi
 | 1    | **TODO**             | `terraform plan` no-op verification of the moved sse-temp state    |
 | 2    | **TODO**             | Apply `infra/shared/` (creates the ephemeral-runner Artifact Registry repo) |
 | 3    | **TODO**             | Push this repo to `github.com/turkeydave/ephemeral` (public)       |
-| 4    | **TODO**             | Run `scripts\build-and-push.ps1` (capture the printed `m1-<sha>` tag) |
+| 4    | **TODO**             | Run `scripts\build-and-push.ps1` (4 platform images; capture the printed `m1-<sha>` tag) |
 | 5    | **TODO**             | Run `scripts\launch-vm.ps1 -Tag m1-<sha>`                          |
 | 6    | **TODO**             | Tail serial console until `==> ephem-startup complete`             |
 | 7    | **TODO**             | Smoke: curl `:8080/healthz` + nip.io URLs in browser               |
@@ -34,11 +34,16 @@ Scaffolding already committed (no GCP changes yet): see
 - `postgres/Dockerfile` — `postgres:16-alpine` + baked init SQL
 - `firebase-emulator/Dockerfile.cloud` — emulator + functions deps + baked
   `emulator-data/`
-- `firebase-app/app/Dockerfile` — nginx + baked static `index.html`/`main.js`
 - `edge-proxy/Dockerfile` + `edge-proxy/Caddyfile` — host-routing reverse
   proxy on `:8080`
-- `docker-compose.cloud.yml` — references all six images by tag
-- `scripts/build-and-push.ps1` — tag and push everything together
+- `pubsub-relay/Dockerfile` — Pub/Sub pull→push relay (mirrors the prod
+  push subscription that this POC stands in for)
+- `docker-compose.cloud.yml` — pulls the four platform images
+  (`postgres-seeded`, `firebase-emulator-seeded`, `pubsub-relay`,
+  `edge-proxy`) from Artifact Registry, and **builds `api` + serves `app`
+  on the VM from the cloned source with bind-mounts** so the agent runner
+  can edit those two in place
+- `scripts/build-and-push.ps1` — builds + pushes the four platform images
 - `scripts/launch-vm.ps1` — gcloud-based hand launch
 
 ## One-time prerequisites
@@ -97,12 +102,19 @@ git push -u origin main
 The startup script does `git clone --depth 1 --branch main` against this
 URL, so a public push must succeed before the VM can boot.
 
-## Step 4 — Build & push the six images
+## Step 4 — Build & push the four platform images
 
 ```powershell
 cd c:\Users\kilmo\development\ephemeral
 .\scripts\build-and-push.ps1
 ```
+
+Builds and pushes the immutable services only:
+`postgres-seeded`, `firebase-emulator-seeded`, `pubsub-relay`, `edge-proxy`.
+
+`api` and `app` are deliberately **not** baked into images here — they
+are agent-editable and get built/served on the VM from the cloned repo
+with bind-mounts (see `docker-compose.cloud.yml`).
 
 Tag defaults to `m1-<short-sha>`. First build of `firebase-emulator-seeded`
 takes a few minutes (npm install + Java base). Note the printed tag.

@@ -155,14 +155,20 @@ painful.
 
 ### Image inventory
 
-| Image                    | Source dir            | Contents                                                 |
-| ------------------------ | --------------------- | -------------------------------------------------------- |
-| `app`                    | `firebase-app/app/`   | nginx + static `index.html` / `main.js`                  |
-| `api`                    | `api/`                | Express + `pg`                                           |
-| `pubsub-relay`           | `pubsub-relay/`       | `@google-cloud/pubsub` pull→push relay                   |
-| `firebase-emulator-seeded` | `firebase-emulator/`  | firebase-tools + functions deps + **baked `emulator-data/`** |
-| `postgres-seeded`        | `postgres/` (new Dockerfile) | `postgres:16-alpine` + **baked init SQL** in `/docker-entrypoint-initdb.d/` |
-| `edge-proxy`             | `edge-proxy/` (new)   | Caddy config that routes `*-app.*` → `app:80`, `*-api.*` → `api:3001` |
+Only the **platform** services are baked into immutable images. `app` and
+`api` are deliberately *not* — they are the agent-editable surface and
+get built / served on the VM from the cloned repo with bind-mounts
+(see `docker-compose.cloud.yml`). This matches the design's "mutable
+checked-out repos" requirement.
+
+| Image                      | Built+pushed? | Source dir            | Contents                                                                                |
+| -------------------------- | ------------- | --------------------- | --------------------------------------------------------------------------------------- |
+| `postgres-seeded`          | ✅            | `postgres/`           | `postgres:16-alpine` + **baked init SQL** in `/docker-entrypoint-initdb.d/`             |
+| `firebase-emulator-seeded` | ✅            | `firebase-emulator/`  | firebase-tools + functions deps + **baked `emulator-data/`**                            |
+| `pubsub-relay`             | ✅            | `pubsub-relay/`       | `@google-cloud/pubsub` pull→push relay (stand-in for the prod push subscription)        |
+| `edge-proxy`               | ✅            | `edge-proxy/`         | Caddy routing `*-app.*` → `app:80`, `*-api.*` → `api:3001`, `*-firestore.*` → emulator |
+| `api`                      | ❌ (built on VM) | `api/`             | Express + `pg`. VM-side `docker compose build` against the cloned repo with `./api:/app` bind-mount. |
+| `app`                      | ❌ (no build)   | `firebase-app/app/` | `nginx:alpine` image + bind-mount of `./firebase-app/app:/usr/share/nginx/html:ro`.    |
 
 ### How each "seeded" image works
 
@@ -222,10 +228,14 @@ Explicitly deferred:
 Today's `docker-compose.yml` is the local dev shape. For the VM we need a
 separate `docker-compose.cloud.yml` (kept in this repo) that:
 
-- uses **image refs from Artifact Registry**, not `build:` directives
+- uses **image refs from Artifact Registry** for the four platform
+  services (`postgres-seeded`, `firebase-emulator-seeded`, `pubsub-relay`,
+  `edge-proxy`) instead of `build:` directives
+- keeps `build:` + bind-mount for `api`, and `nginx:alpine` + bind-mount
+  for `app` — same shape as local — so the agent runner can edit them in
+  place against the cloned `/srv/ephemeral` workspace
 - drops the `./` workspace bind mount on `firebase-emulator` (data is in
   the image now, or on `/mnt/golden`)
-- replaces nginx-bind-mount `app` with the Artifact Registry app image
 - adds a new **edge proxy** service (Caddy is simplest):
   - listens on `:8080`
   - routes by `Host` header:
@@ -293,10 +303,12 @@ Progress:
    Step 2.
 3. ⏳ **Pending you** — `git push` to `github.com/turkeydave/ephemeral`.
    See runbook Step 3.
-4. ✅ **Done (scaffolded)** — six Dockerfiles written (`app`, `api`,
-   `pubsub-relay`, `postgres-seeded`, `firebase-emulator-seeded`,
-   `edge-proxy`) and `scripts/build-and-push.ps1`. **NOT YET PUSHED.**
-   Three of the six built locally as a sanity check. See runbook Step 4.
+4. ✅ **Done (scaffolded)** — four platform Dockerfiles written
+   (`postgres-seeded`, `firebase-emulator-seeded`, `pubsub-relay`,
+   `edge-proxy`) and `scripts/build-and-push.ps1`. `app` and `api` are
+   intentionally not images — built/served on the VM from the cloned
+   repo with bind-mounts (so the agent runner can edit them in place).
+   **NOT YET PUSHED.** See runbook Step 4.
 5. ✅ **Done** — `docker-compose.cloud.yml` + `edge-proxy/Caddyfile`
    committed. `docker compose config` and `caddy validate` both pass.
 6. ⏳ **Pending you** — `scripts/launch-vm.ps1` written but VM not yet
