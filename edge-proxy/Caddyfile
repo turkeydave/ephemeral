@@ -21,10 +21,11 @@
 :8080 {
 	# Caddy's `host` matcher wildcards only span a single label (no
 	# dots), so `*-app.*` would NOT match `smoketest-app.1-2-3-4.nip.io`
-	# (4 labels). Use `host_regexp` instead — anchored, dot-tolerant.
-	@app       host_regexp app ^[^.]+-app\..+$
-	@api       host_regexp api ^[^.]+-api\..+$
-	@firestore host_regexp firestore ^[^.]+-firestore\..+$
+	# (4 labels). Use a regex against the Host header instead — there's
+	# no `host_regexp` matcher, but `header_regexp Host …` works.
+	@app       header_regexp Host ^[^.]+-app\..+$
+	@api       header_regexp Host ^[^.]+-api\..+$
+	@firestore header_regexp Host ^[^.]+-firestore\..+$
 
 	handle /healthz {
 		respond "ok" 200
