@@ -19,25 +19,23 @@ Authoritative design references (in `agentic-cloud-runner_VM_OPT/`):
 
 | Milestone | Status                                                                  |
 | --------- | ----------------------------------------------------------------------- |
-| **M1**    | **In progress.** All scaffolding committed; nothing applied to GCP yet. Resume with [MILESTONE-1-RUNBOOK.md](./MILESTONE-1-RUNBOOK.md). |
-| M2        | Not started. Public ingress: HTTPS LB + serverless NEG + Cloud Run gateway echoing the hostname; gateway forwards to the M1 VM by hardcoded IP. |
+| **M1**    | **✅ Done.** Stack runs on Compute Engine VM, edge proxy routes by host header, full Firestore→Function→PubSub→relay→API→Postgres chain proven. See [MILESTONE-1-RUNBOOK.md](./MILESTONE-1-RUNBOOK.md). |
+| **M2**    | **Next.** HTTPS LB + serverless NEG + Cloud Run gateway echoing the hostname; gateway forwards to a hand-launched VM by hardcoded IP (still no Firestore registry yet — that's M3). |
 | M3        | Not started. Dispatcher + Firestore registry.                           |
 | M4        | Not started. Cleanup worker + IAP/token gating.                         |
 | M5        | Not started. Snapshot data disk + Pub/Sub front + agentic mode skeleton. |
 
-What you need to do next (verbatim from the runbook):
+**M2 plan** (see also [§9 below](#milestone-2--public-ingress)):
 
-1. `gcloud auth login` + `gcloud auth configure-docker us-central1-docker.pkg.dev`
-2. `cd c:\Users\kilmo\development\infra\sse-temp` → `terraform init` →
-   `terraform plan` (expect `No changes.`)
-3. `cd c:\Users\kilmo\development\infra\shared` → `terraform init` →
-   `terraform apply`
-4. `git push` this repo to `github.com/turkeydave/ephemeral`
-5. From repo root: `.\scripts\build-and-push.ps1`
-6. `.\scripts\launch-vm.ps1 -Tag m1-<sha>` (the SHA the build script
-   prints at the end)
-7. Tail serial console; smoke `:8080/healthz` and the nip.io URLs
-8. `gcloud compute instances delete …`
+1. `infra/ephemeral-runner/` Terraform stack: Cloud Run gateway,
+   serverless NEG, URL map, HTTPS (or HTTP for nip.io) load balancer,
+   firewall rule for gateway → VM:8080.
+2. `runner/preview-gateway/` Cloud Run service: parses
+   `<env>-<service>.<rest>` Host header, hardcoded VM IP for now,
+   reverse-proxies to `http://<vm_ip>:8080` over Direct VPC egress.
+3. Hand-launch one VM (M1 flow), grab its IP, set the gateway env var,
+   verify `curl http://<env>-app.<lb-ip>.nip.io/` reaches the VM through
+   LB → gateway → VPC.
 
 Each ephemeral environment runs its **own** Firestore emulator (not real
 Firestore — that's the whole point of this POC). The browser SDK reaches
@@ -287,37 +285,16 @@ or reuse the default if not already used.
 
 ## 9. Implementation sequence (week-shaped milestones)
 
-### Milestone 1 — Plumbing (no dispatcher yet) — **IN PROGRESS**
+### Milestone 1 — Plumbing (no dispatcher yet) — **✅ DONE**
 
-Detailed step-by-step commands to resume from where we left off:
-[MILESTONE-1-RUNBOOK.md](./MILESTONE-1-RUNBOOK.md).
+End-to-end smoke achieved on a single hand-launched Compute Engine VM:
+edge proxy on `:8080` routed by Host header to `app` / `api` /
+`firestore` containers, served via `nip.io` (hostname encodes the VM IP),
+full Firestore-edit → Function → PubSub → relay → API → Postgres chain
+verified.
 
-Progress:
-
-1. ✅ **Done (scaffolded)** — directories reorged: `infra/sse-temp/` is a
-   copy of `sse_temp/terraform/` with state included. Original kept until
-   you confirm `terraform plan` is a no-op in the new location. See
-   runbook Step 1.
-2. ✅ **Done (scaffolded)** — `infra/shared/` written: APIs +
-   `ephemeral-runner` Artifact Registry. **NOT YET APPLIED.** See runbook
-   Step 2.
-3. ⏳ **Pending you** — `git push` to `github.com/turkeydave/ephemeral`.
-   See runbook Step 3.
-4. ✅ **Done (scaffolded)** — four platform Dockerfiles written
-   (`postgres-seeded`, `firebase-emulator-seeded`, `pubsub-relay`,
-   `edge-proxy`) and `scripts/build-and-push.ps1`. `app` and `api` are
-   intentionally not images — built/served on the VM from the cloned
-   repo with bind-mounts (so the agent runner can edit them in place).
-   **NOT YET PUSHED.** See runbook Step 4.
-5. ✅ **Done** — `docker-compose.cloud.yml` + `edge-proxy/Caddyfile`
-   committed. `docker compose config` and `caddy validate` both pass.
-6. ⏳ **Pending you** — `scripts/launch-vm.ps1` written but VM not yet
-   created. See runbook Steps 5–7. Acceptance: `:8080/healthz` returns
-   `ok` and `View Products` in the browser shows the seeded products.
-
-**Where to pick up**: open
-[MILESTONE-1-RUNBOOK.md](./MILESTONE-1-RUNBOOK.md) and start at
-Step 1 (verify sse-temp move).
+See [MILESTONE-1-RUNBOOK.md](./MILESTONE-1-RUNBOOK.md) for the as-built
+status table and the "Gotchas captured during M1" section.
 
 ### Milestone 2 — Public ingress
 
@@ -424,21 +401,21 @@ Step 1 (verify sse-temp move).
 
 When this plan is complete you should have:
 
-- [x] `infra/shared/` Terraform stack (written; **not yet applied**)
-- [ ] `infra/ephemeral-runner/` Terraform stack (placeholder only)
-- [x] `infra/sse-temp/` (relocated as a copy; **original `sse_temp/terraform/`
-      still in place** until verification)
-- [ ] This repo published to a remote (GitHub) — **pending**
+- [x] `infra/shared/` Terraform stack — applied (APIs + Artifact Registry + IAM)
+- [ ] `infra/ephemeral-runner/` Terraform stack (M2: LB + serverless NEG + gateway + firewall)
+- [x] `infra/sse-temp/` relocated (verified `terraform plan` is a no-op modulo cosmetic Cloud Run scaling drift)
+- [x] This repo published to GitHub at `github.com/turkeydave/ephemeral`
 - [x] `docker-compose.cloud.yml` + Caddyfile for the VM-side edge proxy
-- [x] Image build/push script (`scripts/build-and-push.ps1`) — **not yet run**
+- [x] Image build/push script (`scripts/build-and-push.ps1`) — last tag pushed: `m1-deaf62c`
 - [x] VM startup script (`infra/ephemeral-runner/files/startup.sh`)
-- [x] Hand-launch helper (`scripts/launch-vm.ps1`) — **not yet run**
-- [ ] Cloud Run dispatcher service (`runner/dispatcher/`)
-- [ ] Cloud Run preview gateway service (`runner/preview-gateway/`)
-- [ ] Cloud Run cleanup worker (`runner/cleanup/`)
-- [ ] CLI helper (`scripts/preview.ps1`)
+- [x] Hand-launch helper (`scripts/launch-vm.ps1`)
+- [x] M1 end-to-end smoke: VM live, all 4 routes 200, full Firestore→Postgres chain proven
+- [ ] Cloud Run preview gateway service (`runner/preview-gateway/`) — M2
+- [ ] Cloud Run dispatcher service (`runner/dispatcher/`) — M3
+- [ ] Cloud Run cleanup worker (`runner/cleanup/`) — M4
+- [ ] CLI helper (`scripts/preview.ps1`) — M4
 - [ ] One successful end-to-end run: dispatcher call → reachable URL →
-      seeded data visible → cleanup deletes VM + disk
+      seeded data visible → cleanup deletes VM + disk — M3/M4
 
 ## 13. What we will NOT touch in this POC
 

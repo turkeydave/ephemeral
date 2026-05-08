@@ -6,21 +6,46 @@ the edge proxy and renders the app.
 
 Per [POC-Implementation-Plan.md §9 Milestone 1](./POC-Implementation-Plan.md#milestone-1--plumbing-no-dispatcher-yet).
 
-## Status — pick up here
+## Status — DONE ✅
 
-| Step | Status               | Notes                                                              |
-| ---- | -------------------- | ------------------------------------------------------------------ |
-| 0    | **TODO**             | gcloud auth + docker auth on your workstation                      |
-| 1    | **TODO**             | `terraform plan` no-op verification of the moved sse-temp state    |
-| 2    | **TODO**             | Apply `infra/shared/` (creates the ephemeral-runner Artifact Registry repo) |
-| 3    | **TODO**             | Push this repo to `github.com/turkeydave/ephemeral` (public)       |
-| 4    | **TODO**             | Run `scripts\build-and-push.ps1` (4 platform images; capture the printed `m1-<sha>` tag) |
-| 5    | **TODO**             | Run `scripts\launch-vm.ps1 -Tag m1-<sha>`                          |
-| 6    | **TODO**             | Tail serial console until `==> ephem-startup complete`             |
-| 7    | **TODO**             | Smoke: curl `:8080/healthz` + nip.io URLs in browser               |
-| 8    | **TODO**             | Tear the VM down                                                   |
+| Step | Status | Notes                                                              |
+| ---- | ------ | ------------------------------------------------------------------ |
+| 0    | ✅     | gcloud auth + docker auth                                          |
+| 1    | ✅     | sse-temp move verified (3 cosmetic Cloud Run scaling drift updates only — not applied) |
+| 2    | ✅     | `infra/shared/` applied — `ephemeral-runner` Artifact Registry + 9 APIs + IAM bindings on default Compute SA |
+| 3    | ✅     | Repo on `github.com/turkeydave/ephemeral`                          |
+| 4    | ✅     | 4 platform images pushed at tag `m1-deaf62c`                       |
+| 5    | ✅     | VM `ephem-m1-1778251367` launched + verified                       |
+| 6    | ✅     | Startup completed; all 6 containers running                        |
+| 7    | ✅     | `:8080/healthz`, `<env>-app.<ip>.nip.io`, `<env>-api.<ip>.nip.io/products`, `<env>-firestore.<ip>.nip.io` all returned 200; full Firestore→Function→PubSub→relay→api→Postgres chain proven |
+| 8    | ✅     | VM deleted                                                         |
 
-When you mark Step 7 ✅ here, M1 is done; move to Milestone 2.
+Move on to **Milestone 2** (HTTPS LB + serverless NEG + Cloud Run gateway).
+
+## Gotchas captured during M1
+
+These tripped us up; if you re-run from scratch they're already in code.
+
+- **Default Compute SA IAM**: out-of-the-box a personal-project Compute SA
+  cannot pull from a fresh Artifact Registry repo nor write logs. Now
+  granted in [infra/shared/iam.tf](file:///c:/Users/kilmo/development/infra/shared/iam.tf):
+  `roles/artifactregistry.reader` on the `ephemeral-runner` repo,
+  `roles/logging.logWriter` and `roles/monitoring.metricWriter`
+  project-wide.
+- **Caddy `host` matcher is single-label**: `host *-app.*` does NOT match
+  `smoketest-app.34-41-236-216.nip.io` (4 labels). Use
+  `header_regexp Host ^[^.]+-app\..+$` instead. There is no
+  `host_regexp` matcher.
+- **PowerShell `$ErrorActionPreference = "Stop"` + native gcloud stderr**:
+  `gcloud … describe` writes errors to stderr and exits 1 when the
+  resource is missing — even with `2>$null` PowerShell turns that into a
+  fatal NativeCommandError. The firewall idempotency check in
+  [launch-vm.ps1](file:///c:/Users/kilmo/development/ephemeral/scripts/launch-vm.ps1)
+  now wraps it in `try/catch` and clears `$LASTEXITCODE`.
+- **`${...}` in Terraform output `description`**: Terraform tries to
+  interpret it. Plain `<registry>` text instead.
+- **Disk size warning is harmless**: "Disk size 20 GB is larger than
+  image size 10 GB" — Debian 12 auto-resizes on boot. Ignore.
 
 Scaffolding already committed (no GCP changes yet): see
 [POC-Implementation-Plan.md §9 Milestone 1 progress list](./POC-Implementation-Plan.md#milestone-1--plumbing-no-dispatcher-yet--in-progress).

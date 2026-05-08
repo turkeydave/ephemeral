@@ -62,7 +62,19 @@ Write-Host "Startup sh : $StartupSh" -ForegroundColor Cyan
 Write-Host ""
 
 # ---- firewall rule (idempotent) ----
-$existing = gcloud compute firewall-rules describe $Firewall --project=$Project --format="value(name)" 2>$null
+# `gcloud ... describe` writes to stderr and exits 1 when the rule is
+# missing. With $ErrorActionPreference = "Stop", that bubbles up as a
+# NativeCommandError. Suppress both streams and rely on $LASTEXITCODE.
+$existing = $null
+try {
+  $existing = & gcloud compute firewall-rules describe $Firewall `
+    --project=$Project --format="value(name)" 2>$null
+} catch {
+  $existing = $null
+}
+if ($LASTEXITCODE -ne 0) { $existing = $null }
+$global:LASTEXITCODE = 0
+
 if (-not $existing) {
   Write-Host "==> creating firewall rule $Firewall (allow tcp:8080 from anywhere, target tag ephem-runner-vm)" -ForegroundColor Green
   gcloud compute firewall-rules create $Firewall `
