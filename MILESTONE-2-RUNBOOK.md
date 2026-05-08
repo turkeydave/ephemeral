@@ -34,17 +34,26 @@ user ───▶ │ Global HTTP LB on static IPv4 │
 VM IP is hardcoded as a Cloud Run env var (`VM_IP`). M3 swaps that for a
 Firestore registry lookup keyed by `<env_id>` parsed from the Host header.
 
-## Status
+## Status — DONE ✅
 
-| Step | Status   | Notes                                                                              |
-| ---- | -------- | ---------------------------------------------------------------------------------- |
-| 0    | **TODO** | Build + push the new `preview-gateway` image (now in `scripts/build-and-push.ps1`) |
-| 1    | **TODO** | `terraform apply` in `infra/ephemeral-runner/` — provisions LB + Cloud Run + firewall |
-| 2    | **TODO** | Hand-launch a fresh M1 VM, capture its **internal** IP                             |
-| 3    | **TODO** | Update `vm_ip` in `infra/ephemeral-runner/terraform.tfvars`, re-apply              |
-| 4    | **TODO** | Smoke from your laptop: `curl http://smoketest-app.<lb-ip-dashed>.nip.io/`         |
-| 5    | **TODO** | Remove the wide-open M1 firewall rule (`ephem-runner-allow-edge-8080`)             |
-| 6    | **TODO** | Verify the VM is now reachable **only** through the LB → gateway path              |
+| Step | Status | Notes                                                                                                                                          |
+| ---- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | ✅     | 5 platform images pushed at tag `m1-1685a8a` (`preview-gateway` joined the set)                                                                |
+| 1    | ✅     | `terraform apply` in `infra/ephemeral-runner/` — 14 resources (LB IP `34.120.91.102`, serverless NEG, backend, URL map, HTTP proxy, fwd rule, gateway SA, /26 egress subnet, narrow firewall, Cloud Run service) |
+| 2    | ✅     | VM `ephem-m1-1778258045` launched, internal IP `10.128.0.6`                                                                                    |
+| 3    | ✅     | `vm_ip = "10.128.0.6"` set, re-apply rolled the gateway in 10s                                                                                 |
+| 4    | ✅     | `app` / `api` / `firestore` / `__gateway/info` all 200 via `*.34-120-91-102.nip.io`. Response headers show `Via: 1.1 Caddy, 1.1 google` confirming the LB → gateway → VPC → VM Caddy path |
+| 5    | ✅     | `ephem-runner-allow-edge-8080` deleted                                                                                                         |
+| 6    | ✅     | Direct `curl http://<vm-external>:8080/healthz` times out; LB path still serves                                                                |
+
+Move on to **Milestone 3** (Firestore registry + dispatcher; gateway switches from `VM_IP` env var to a Firestore lookup keyed by `<env_id>` parsed from the Host header).
+
+## Gotchas captured during M2
+
+- **Default network blocks small custom subnets**: auto-mode VPC reserves `10.128.0.0/9` across regions. M2 egress subnet has to live outside that — picked `10.10.0.0/26` ([variables.tf](file:///c:/Users/kilmo/development/infra/ephemeral-runner/variables.tf)).
+- **Cloud Run Direct VPC egress needs ≥ /26**: `/28` returned `Health check failed for the deployment with the user-provided VPC network. There are no sufficient IP addresses`. Bumped to `/26` (64 IPs).
+- **Cloud Run v2 service has `deletion_protection = true` by default**: Terraform can't recreate a service it created without `deletion_protection = false` in the resource. Set explicitly in [cloudrun.tf](file:///c:/Users/kilmo/development/infra/ephemeral-runner/cloudrun.tf). After it bites once, the workaround is `gcloud run services delete …` then re-apply.
+- **Backend service creation is slow** (~70s). URL map → HTTP proxy → forwarding rule each take ~10–30s on top. First-time apply ~3min total.
 
 ## Step 0 — Build + push the gateway image
 

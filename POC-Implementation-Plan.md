@@ -20,8 +20,8 @@ Authoritative design references (in `agentic-cloud-runner_VM_OPT/`):
 | Milestone | Status                                                                  |
 | --------- | ----------------------------------------------------------------------- |
 | **M1**    | **✅ Done.** Stack runs on Compute Engine VM, edge proxy routes by host header, full Firestore→Function→PubSub→relay→API→Postgres chain proven. See [MILESTONE-1-RUNBOOK.md](./MILESTONE-1-RUNBOOK.md). |
-| **M2**    | **Next.** HTTPS LB + serverless NEG + Cloud Run gateway echoing the hostname; gateway forwards to a hand-launched VM by hardcoded IP (still no Firestore registry yet — that's M3). |
-| M3        | Not started. Dispatcher + Firestore registry.                           |
+| **M2**    | **✅ Done.** Global HTTP LB + Cloud Run preview-gateway forwards to the M1 VM over Direct VPC egress. VM is now reachable only via the LB path (M1's wide-open `:8080` firewall removed). See [MILESTONE-2-RUNBOOK.md](./MILESTONE-2-RUNBOOK.md). |
+| **M3**    | **Next.** Firestore registry + Cloud Run dispatcher. Gateway switches from `VM_IP` env var to a registry lookup keyed by `<env_id>` parsed from the Host header. |
 | M4        | Not started. Cleanup worker + IAP/token gating.                         |
 | M5        | Not started. Snapshot data disk + Pub/Sub front + agentic mode skeleton. |
 
@@ -296,15 +296,15 @@ verified.
 See [MILESTONE-1-RUNBOOK.md](./MILESTONE-1-RUNBOOK.md) for the as-built
 status table and the "Gotchas captured during M1" section.
 
-### Milestone 2 — Public ingress
+### Milestone 2 — Public ingress — **✅ DONE**
 
-7. Add HTTPS LB + serverless NEG → placeholder Cloud Run service.
-8. Add Caddy/nginx-based **preview gateway** Cloud Run service that
-   echoes hostname for now (no Firestore lookup yet).
-9. Add wildcard DNS (real domain or `nip.io` shortcut) and verify
-   `curl https://test-app.<host>` reaches the gateway.
-10. Add Direct VPC egress + firewall rule and have the gateway forward
-    to the Milestone 1 VM by hardcoded IP. End-to-end browser hit. ✅
+End-to-end ingress proven: global HTTP LB → serverless NEG → Cloud Run
+`preview-gateway` → Direct VPC egress → M1 VM internal IP :8080. The
+wide-open M1 firewall rule has been removed; the only path to the VM is
+now via the LB.
+
+See [MILESTONE-2-RUNBOOK.md](./MILESTONE-2-RUNBOOK.md) for the as-built
+status table and the "Gotchas captured during M2" section.
 
 ### Milestone 3 — Dispatcher + registry
 
@@ -402,15 +402,16 @@ status table and the "Gotchas captured during M1" section.
 When this plan is complete you should have:
 
 - [x] `infra/shared/` Terraform stack — applied (APIs + Artifact Registry + IAM)
-- [ ] `infra/ephemeral-runner/` Terraform stack (M2: LB + serverless NEG + gateway + firewall)
+- [x] `infra/ephemeral-runner/` Terraform stack — M2 applied (LB IP `34.120.91.102`, serverless NEG, Cloud Run `preview-gateway`, /26 egress subnet, narrow firewall)
 - [x] `infra/sse-temp/` relocated (verified `terraform plan` is a no-op modulo cosmetic Cloud Run scaling drift)
 - [x] This repo published to GitHub at `github.com/turkeydave/ephemeral`
 - [x] `docker-compose.cloud.yml` + Caddyfile for the VM-side edge proxy
-- [x] Image build/push script (`scripts/build-and-push.ps1`) — last tag pushed: `m1-deaf62c`
+- [x] Image build/push script (`scripts/build-and-push.ps1`) — last tag pushed: `m1-1685a8a` (5 platform images)
 - [x] VM startup script (`infra/ephemeral-runner/files/startup.sh`)
 - [x] Hand-launch helper (`scripts/launch-vm.ps1`)
 - [x] M1 end-to-end smoke: VM live, all 4 routes 200, full Firestore→Postgres chain proven
-- [ ] Cloud Run preview gateway service (`runner/preview-gateway/`) — M2
+- [x] Cloud Run preview gateway service ([runner/preview-gateway/](file:///c:/Users/kilmo/development/ephemeral/runner/preview-gateway)) — M2 deployed; LB → gateway → VPC → VM verified
+- [x] M2 lock-down: VM no longer reachable on public `:8080`; only the LB → gateway path
 - [ ] Cloud Run dispatcher service (`runner/dispatcher/`) — M3
 - [ ] Cloud Run cleanup worker (`runner/cleanup/`) — M4
 - [ ] CLI helper (`scripts/preview.ps1`) — M4
