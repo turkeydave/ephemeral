@@ -44,7 +44,6 @@ const db = getFirestore(app);
 // (which the POC never wants) and surface that loudly in the console.
 function resolveEmulatorTarget() {
   const host = window.location.hostname;
-  const port = window.location.port || '8080';
 
   if (host === 'localhost' || host === '127.0.0.1') {
     return { host: 'localhost', port: 8080 };
@@ -52,7 +51,15 @@ function resolveEmulatorTarget() {
 
   const m = host.match(/^([^.]+)-(?:app|api|firestore)\.(.+)$/);
   if (m) {
-    return { host: `${m[1]}-firestore.${m[2]}`, port: parseInt(port, 10) };
+    // Use whatever ingress served us. In M1 the browser hit the VM
+    // directly on :8080 (window.location.port === '8080'); in M2+ the
+    // global HTTP LB serves on :80 and window.location.port is empty,
+    // so we must NOT fall back to 8080 — that would bypass the LB and
+    // hit the VM's now-firewalled :8080 directly.
+    const port = window.location.port
+      ? parseInt(window.location.port, 10)
+      : (window.location.protocol === 'https:' ? 443 : 80);
+    return { host: `${m[1]}-firestore.${m[2]}`, port };
   }
 
   return null;
