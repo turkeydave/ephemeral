@@ -1,0 +1,13 @@
+{
+  "name": "preview-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "M2 preview gateway: reverse-proxies preview URLs to a hand-launched VM by Host header. Hardcoded VM IP via VM_IP env var (M3 swaps that for a Firestore lookup).",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}

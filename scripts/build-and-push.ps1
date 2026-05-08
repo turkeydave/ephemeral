@@ -1,13 +1,14 @@
 <#
 .SYNOPSIS
-  Build and push the four "platform" ephemeral-runner images to Artifact Registry.
+  Build and push the five "platform" ephemeral-runner images to Artifact Registry.
 
 .DESCRIPTION
   Builds and pushes the immutable, agent-non-editable services:
-    - postgres-seeded
-    - firebase-emulator-seeded
-    - pubsub-relay
-    - edge-proxy
+    - postgres-seeded            (per-VM)
+    - firebase-emulator-seeded   (per-VM)
+    - pubsub-relay               (per-VM)
+    - edge-proxy                 (per-VM)
+    - preview-gateway            (Cloud Run, M2+)
 
   The mutable services (`app`, `api`) are NOT built into images. Each VM
   clones this repo at startup and `docker-compose.cloud.yml` builds those
@@ -52,10 +53,11 @@ Write-Host ""
 # agent-editable and are built on the VM by docker-compose.cloud.yml
 # against the cloned repo (see docker-compose.cloud.yml).
 $Images = @(
-  @{ Name = "pubsub-relay";               Dockerfile = "pubsub-relay/Dockerfile";         Context = "pubsub-relay" },
-  @{ Name = "postgres-seeded";            Dockerfile = "postgres/Dockerfile";             Context = "postgres" },
+  @{ Name = "pubsub-relay";               Dockerfile = "pubsub-relay/Dockerfile";            Context = "pubsub-relay" },
+  @{ Name = "postgres-seeded";            Dockerfile = "postgres/Dockerfile";                Context = "postgres" },
   @{ Name = "firebase-emulator-seeded";   Dockerfile = "firebase-emulator/Dockerfile.cloud"; Context = "." },
-  @{ Name = "edge-proxy";                 Dockerfile = "edge-proxy/Dockerfile";           Context = "edge-proxy" }
+  @{ Name = "edge-proxy";                 Dockerfile = "edge-proxy/Dockerfile";              Context = "edge-proxy" },
+  @{ Name = "preview-gateway";            Dockerfile = "runner/preview-gateway/Dockerfile";  Context = "runner/preview-gateway" }
 )
 
 foreach ($img in $Images) {
