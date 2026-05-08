@@ -176,9 +176,11 @@ hostname; gateway forwards to the VM by hardcoded IP).
   grant it explicitly.
 - **`firebase-emulator-seeded` 10s discovery timeout**: already mitigated
   by `FUNCTIONS_DISCOVERY_TIMEOUT=60` in the compose file.
-- **App loads but no tasks**: the local app's `connectFirestoreEmulator`
-  check runs only on `localhost`/`127.0.0.1` hostnames. In the cloud the
-  hostname is `*.nip.io` so the SDK targets *real* Firestore, which is
-  empty. **Known M1 limitation** — fix in Milestone 2: have the app point
-  at the in-VM emulator via the API, or expose the firestore emulator port
-  through the edge proxy.
+- **Tasks list says it can't reach Firestore**: the app derives the
+  emulator hostname from its own URL by swapping `-app.` for
+  `-firestore.` (see `firebase-app/app/main.js`). That sister hostname is
+  routed by the edge proxy to the in-VM firebase emulator. If you launched
+  the VM with a hostname that doesn't match the `<env>-app.<rest>` pattern
+  (e.g. you typed the VM IP directly into the browser), the regex won't
+  match and the app will surface that error in the DevTools console. Use
+  the nip.io URL the launch script printed.

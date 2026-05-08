@@ -19,8 +19,9 @@
 }
 
 :8080 {
-	@app host *-app.*
-	@api host *-api.*
+	@app       host *-app.*
+	@api       host *-api.*
+	@firestore host *-firestore.*
 
 	handle /healthz {
 		respond "ok" 200
@@ -34,7 +35,20 @@
 		reverse_proxy api:3001
 	}
 
+	# Firestore emulator. Browser SDK is configured (in app/main.js) to
+	# talk here, so each ephemeral env has its own emulator-backed
+	# Firestore instead of sharing a real GCP one.
+	#
+	# Firestore's JS SDK uses long polling and (optionally) WebChannel
+	# over HTTP — Caddy proxies both transparently. Buffering is disabled
+	# to keep the long-poll stream live.
+	handle @firestore {
+		reverse_proxy firebase-emulator:8080 {
+			flush_interval -1
+		}
+	}
+
 	handle {
-		respond "edge-proxy: no host match (expected *-app.* or *-api.*)" 404
+		respond "edge-proxy: no host match (expected *-app.* / *-api.* / *-firestore.*)" 404
 	}
 }

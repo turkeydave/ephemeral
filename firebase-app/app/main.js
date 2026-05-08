@@ -27,17 +27,71 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+// Decide where the Firestore emulator lives. The whole point of this POC
+// is that every ephemeral environment runs its own emulator — never real
+// Firestore — so we wire connectFirestoreEmulator in two cases:
+//
+//   1. Local dev:  hostname is localhost / 127.0.0.1
+//                  -> emulator at localhost:8080
+//
+//   2. Cloud preview: hostname matches `<env>-app.<rest>` (the URL the
+//      preview gateway / nip.io serves the app from). The same VM exposes
+//      the firestore emulator through its edge proxy on a sister
+//      hostname `<env>-firestore.<rest>` on the same port.
+//                  -> emulator at <env>-firestore.<rest>:<same port>
+//
+// If neither pattern matches we leave the SDK pointing at real Firestore
+// (which the POC never wants) and surface that loudly in the console.
+function resolveEmulatorTarget() {
+  const host = window.location.hostname;
+  const port = window.location.port || '8080';
+
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return { host: 'localhost', port: 8080 };
+  }
+
+  const m = host.match(/^([^.]+)-(?:app|api|firestore)\.(.+)$/);
+  if (m) {
+    return { host: `${m[1]}-firestore.${m[2]}`, port: parseInt(port, 10) };
+  }
+
+  return null;
+}
+
+const emuTarget = resolveEmulatorTarget();
+if (emuTarget) {
   try {
-    connectFirestoreEmulator(db, 'localhost', 8080);
-    console.info('Firestore emulator connected at localhost:8080');
+    connectFirestoreEmulator(db, emuTarget.host, emuTarget.port);
+    console.info(`Firestore emulator connected at ${emuTarget.host}:${emuTarget.port}`);
   } catch (e) {
     console.warn('Could not connect to Firestore emulator:', e && e.message ? e.message : e);
   }
+} else {
+  console.error(
+    `Could not derive a Firestore emulator host from "${window.location.hostname}". ` +
+    `This POC never uses real Firestore — expected hostname pattern <env>-app.<rest>.`
+  );
 }
 
 // ----- API base (Express + Postgres service) -----
-const API_BASE = 'http://localhost:3001';
+// Local dev: api is on http://localhost:3001 (compose host port).
+// Cloud preview: api is reached through the edge proxy on the sister
+// hostname <env>-api.<rest> on the same port the app was served from.
+const API_BASE = (() => {
+  const host = window.location.hostname;
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return 'http://localhost:3001';
+  }
+  const m = host.match(/^([^.]+)-(?:app|api|firestore)\.(.+)$/);
+  if (m) {
+    const port = window.location.port ? `:${window.location.port}` : '';
+    return `${window.location.protocol}//${m[1]}-api.${m[2]}${port}`;
+  }
+  // Last-resort fallback: same origin (won't actually work, but at least
+  // the error in DevTools will be obvious).
+  return window.location.origin;
+})();
+console.info(`api base: ${API_BASE}`);
 
 // ----- DOM -----
 const tasksEl = document.getElementById('tasks');

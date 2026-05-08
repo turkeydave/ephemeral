@@ -39,12 +39,12 @@ What you need to do next (verbatim from the runbook):
 7. Tail serial console; smoke `:8080/healthz` and the nip.io URLs
 8. `gcloud compute instances delete …`
 
-Known M1 limitation (carried into M2): the in-cloud app is served from
-`*.nip.io`, so the SDK's `connectFirestoreEmulator` guard
-(`hostname === 'localhost'`) doesn't fire and the Tasks list will fail.
-**Products** (API → Postgres) and **History (Postgres)** still work end
-to end. Resolved in M2 by either exposing the firestore emulator through
-the edge proxy or moving the app to real Firestore.
+Each ephemeral environment runs its **own** Firestore emulator (not real
+Firestore — that's the whole point of this POC). The browser SDK reaches
+it through a sister hostname `<env>-firestore.<rest>` routed by the
+edge proxy to `firebase-emulator:8080`. The hostname is derived in
+`firebase-app/app/main.js` from `window.location.hostname`, so no env
+vars or build-time substitution required.
 
 ## 0. Mapping the design to our actual stack
 
