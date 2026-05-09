@@ -21,8 +21,8 @@ Authoritative design references (in `agentic-cloud-runner_VM_OPT/`):
 | --------- | ----------------------------------------------------------------------- |
 | **M1**    | **✅ Done.** Stack runs on Compute Engine VM, edge proxy routes by host header, full Firestore→Function→PubSub→relay→API→Postgres chain proven. See [MILESTONE-1-RUNBOOK.md](./MILESTONE-1-RUNBOOK.md). |
 | **M2**    | **✅ Done.** Global HTTP LB + Cloud Run preview-gateway forwards to the M1 VM over Direct VPC egress. VM is now reachable only via the LB path (M1's wide-open `:8080` firewall removed). See [MILESTONE-2-RUNBOOK.md](./MILESTONE-2-RUNBOOK.md). |
-| **M3**    | **Next.** Firestore registry + Cloud Run dispatcher. Gateway switches from `VM_IP` env var to a registry lookup keyed by `<env_id>` parsed from the Host header. |
-| M4        | Not started. Cleanup worker + IAP/token gating.                         |
+| **M3**    | **✅ Done.** Cloud Run dispatcher creates per-env VMs and writes the Firestore env registry; gateway resolves `<env_id>` from the Host header against `agent_environments/<env_id>` (5s cache); VM startup script patches the doc to `status=ready` once the stack is live. See [MILESTONE-3-RUNBOOK.md](./MILESTONE-3-RUNBOOK.md). |
+| **M4**    | **Next.** Cleanup worker + IAP/token gating + small CLI helper.         |
 | M5        | Not started. Snapshot data disk + Pub/Sub front + agentic mode skeleton. |
 
 **M2 plan** (see also [§9 below](#milestone-2--public-ingress)):
@@ -306,20 +306,20 @@ now via the LB.
 See [MILESTONE-2-RUNBOOK.md](./MILESTONE-2-RUNBOOK.md) for the as-built
 status table and the "Gotchas captured during M2" section.
 
-### Milestone 3 — Dispatcher + registry
+### Milestone 3 — Dispatcher + registry — **✅ DONE**
 
-11. `infra/ephemeral-runner/firestore.tf` for the registry collection.
-12. Cloud Run **dispatcher** (`POST /environments`):
-    - validates payload
-    - generates `environment_id`
-    - creates VM from instance template (`gcloud compute instances create`
-      via SDK), passes metadata
-    - writes Firestore record `status=launching`
-    - returns `{environment_id, public_urls}`
-13. VM startup script writes `ready_at` + `vm_internal_ip` to Firestore
-    when Caddy `/healthz` passes.
-14. Gateway switches from hardcoded IP to Firestore lookup; returns
-    `503` until `status=ready`. ✅ end-to-end on a fresh request.
+End-to-end smoke proven: `POST /environments` on the dispatcher Cloud
+Run service mints `e-<random>`, writes `agent_environments/<env_id>` in
+the existing `(default)` Firestore DB with `status=launching`, and
+calls the Compute API to create a new task VM. The VM's `startup.sh`
+patches the doc to `status=ready` (with `vm_internal_ip` and
+`ready_at`) after the edge proxy `/healthz` passes; the gateway then
+resolves `<env_id>` from the Host header and proxies straight to that
+VM. No more hardcoded `VM_IP` env var (kept only as a `smoketest`
+fallback for backwards compat).
+
+See [MILESTONE-3-RUNBOOK.md](./MILESTONE-3-RUNBOOK.md) for the as-built
+status table and the "Gotchas captured during M3" section.
 
 ### Milestone 4 — Cleanup + safety
 
@@ -412,11 +412,14 @@ When this plan is complete you should have:
 - [x] M1 end-to-end smoke: VM live, all 4 routes 200, full Firestore→Postgres chain proven
 - [x] Cloud Run preview gateway service ([runner/preview-gateway/](file:///c:/Users/kilmo/development/ephemeral/runner/preview-gateway)) — M2 deployed; LB → gateway → VPC → VM verified
 - [x] M2 lock-down: VM no longer reachable on public `:8080`; only the LB → gateway path
-- [ ] Cloud Run dispatcher service (`runner/dispatcher/`) — M3
+- [x] Cloud Run dispatcher service ([runner/dispatcher/](file:///c:/Users/kilmo/development/ephemeral/runner/dispatcher)) — M3 deployed; `POST /environments` mints env_id, writes Firestore registry, creates VM
+- [x] Firestore env registry: `agent_environments` collection in the existing `(default)` DB; written by dispatcher (status=launching), patched by VM startup.sh (status=ready)
+- [x] VM startup script writes registry doc on `/healthz` (Firestore REST PATCH from bash via metadata-server token)
+- [x] Preview gateway resolves `<env_id>` from Host header against Firestore, with 5s cache + smoketest fallback to `VM_IP` env var
+- [x] M3 end-to-end: `POST /environments` → e-b886e5f0 → ~2.5min → app/api/firestore all 200 through gateway
 - [ ] Cloud Run cleanup worker (`runner/cleanup/`) — M4
 - [ ] CLI helper (`scripts/preview.ps1`) — M4
-- [ ] One successful end-to-end run: dispatcher call → reachable URL →
-      seeded data visible → cleanup deletes VM + disk — M3/M4
+- [ ] Cleanup deletes VM + disk on TTL expiry — M4
 
 ## 13. What we will NOT touch in this POC
 
