@@ -43,7 +43,7 @@ $Project   = "project-4b04c9cf-520a-4693-86a"
 $Region    = "us-central1"
 $Network   = "default"
 $Firewall  = "ephem-runner-allow-edge-8080"
-$StartupSh = (Resolve-Path "$PSScriptRoot\..\..\infra\ephemeral-runner\files\startup.sh").Path
+$StartupSh = (Resolve-Path "$PSScriptRoot\..\runner\dispatcher\files\startup.sh").Path
 
 if (-not (Test-Path $StartupSh)) {
   throw "Startup script not found at $StartupSh"
