@@ -1,13 +1,14 @@
 {
   "name": "preview-gateway",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "M2 preview gateway: reverse-proxies preview URLs to a hand-launched VM by Host header. Hardcoded VM IP via VM_IP env var (M3 swaps that for a Firestore lookup).",
+  "description": "M3 preview gateway: parses env_id from Host header, looks up the per-env task VM IP in Firestore (agent_environments/<env_id>), reverse-proxies to <vm_internal_ip>:8080. Falls back to a hardcoded VM_IP env var only when env_id == 'smoketest' (M2 compatibility).",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "@google-cloud/firestore": "^7.10.0",
     "http-proxy": "^1.18.1"
   }
 }
