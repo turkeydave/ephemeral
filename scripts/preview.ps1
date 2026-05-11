@@ -27,8 +27,14 @@
 
 .PARAMETER DispatcherUrl
   Override the dispatcher base URL. Default: read from
-  `terraform output -raw dispatcher_url` if INFRA_DIR is set, else
-  hardcoded fallback below.
+  `terraform output -raw dispatcher_url` (uses INFRA_DIR if set, else
+  c:\Users\kilmo\development\infra\ephemeral-runner).
+
+.PARAMETER CliCallerSa
+  Service account to impersonate when minting the Cloud Run ID token.
+  Default: read from `terraform output -raw cli_caller_sa`. The active
+  gcloud user must have `roles/iam.serviceAccountTokenCreator` on this
+  SA — terraform grants it to anyone in `dispatcher_invoker_members`.
 
 .PARAMETER NoOpen
   Don't open the browser after the env becomes ready.
@@ -45,38 +51,54 @@ param(
   [string]$Tag           = "",
   [int]   $TtlSeconds    = 3600,
   [string]$DispatcherUrl = "",
+  [string]$CliCallerSa   = "",
   [switch]$NoOpen,
   [switch]$NoWait
 )
 
 $ErrorActionPreference = "Stop"
 
-# ---- resolve dispatcher URL ----
-if (-not $DispatcherUrl) {
-  $InfraDir = $env:INFRA_DIR
-  if (-not $InfraDir) {
-    $InfraDir = "c:\Users\kilmo\development\infra\ephemeral-runner"
-  }
-  if (Test-Path $InfraDir) {
-    Push-Location $InfraDir
-    try {
-      $DispatcherUrl = (terraform output -raw dispatcher_url 2>$null).Trim()
-    } catch {
-      $DispatcherUrl = ""
-    }
+# ---- resolve config from terraform outputs ----
+$InfraDir = $env:INFRA_DIR
+if (-not $InfraDir) {
+  $InfraDir = "c:\Users\kilmo\development\infra\ephemeral-runner"
+}
+
+function Get-TfOutput([string]$name) {
+  if (-not (Test-Path $InfraDir)) { return "" }
+  Push-Location $InfraDir
+  try {
+    $val = (terraform output -raw $name 2>$null)
+    if ($LASTEXITCODE -ne 0) { return "" }
+    return $val.Trim()
+  } finally {
     Pop-Location
   }
 }
 
-if (-not $DispatcherUrl) {
-  throw "Could not resolve dispatcher URL. Pass -DispatcherUrl explicitly or set INFRA_DIR to your terraform stack dir."
+if (-not $DispatcherUrl) { $DispatcherUrl = Get-TfOutput dispatcher_url }
+if (-not $CliCallerSa)   { $CliCallerSa   = Get-TfOutput cli_caller_sa }
+
+if (-not $DispatcherUrl) { throw "Could not resolve dispatcher_url. Pass -DispatcherUrl or set INFRA_DIR." }
+if (-not $CliCallerSa)   { throw "Could not resolve cli_caller_sa. Pass -CliCallerSa or set INFRA_DIR." }
+
+Write-Host "Dispatcher : $DispatcherUrl" -ForegroundColor Cyan
+Write-Host "Impersonate: $CliCallerSa"   -ForegroundColor Cyan
+
+# ---- mint OIDC token via SA impersonation ----
+# Cloud Run requires an ID token whose `aud` claim matches the service
+# URL. User accounts can't mint such tokens directly, so we impersonate
+# the cli-caller SA (terraform grants the active user
+# roles/iam.serviceAccountTokenCreator on it).
+# gcloud writes a 'using service account impersonation' WARNING to
+# stderr that PowerShell 5's stop-on-stderr behaviour treats as a
+# terminating error. Route through cmd to swallow stderr cleanly.
+$gcloudCmd = "gcloud auth print-identity-token --impersonate-service-account=$CliCallerSa --audiences=$DispatcherUrl 2>NUL"
+$Token = (& cmd /c $gcloudCmd) | Out-String
+$Token = $Token.Trim()
+if ($LASTEXITCODE -ne 0 -or -not $Token) {
+  throw "Failed to mint identity token via $CliCallerSa (cmd exit $LASTEXITCODE). Run the gcloud command manually to see why."
 }
-
-Write-Host "Dispatcher: $DispatcherUrl" -ForegroundColor Cyan
-
-# ---- mint identity token (Cloud Run audience = dispatcher URL) ----
-$Token = (gcloud auth print-identity-token --audiences=$DispatcherUrl).Trim()
-if (-not $Token) { throw "gcloud auth print-identity-token returned empty. Run `gcloud auth login`." }
 
 # ---- build request body ----
 $body = @{
@@ -86,14 +108,22 @@ $body = @{
 if ($Tag) { $body.image_tag = $Tag }
 $bodyJson = $body | ConvertTo-Json -Compress
 
+# Write the body to a temp file so curl reads it verbatim — PowerShell's
+# arg-passing to native commands mangles JSON otherwise.
+$bodyFile = New-TemporaryFile
+# .NET WriteAllText with UTF8Encoding($false) -> no BOM; PowerShell 5's
+# `-Encoding UTF8` always adds one, which the dispatcher rejects.
+[System.IO.File]::WriteAllText($bodyFile, $bodyJson, [System.Text.UTF8Encoding]::new($false))
+
 # ---- POST /environments ----
 Write-Host ""
-Write-Host "==> POST /environments" -ForegroundColor Green
+Write-Host "==> POST /environments  body=$bodyJson" -ForegroundColor Green
 $resp = curl.exe -sS -w "`n%{http_code}" `
   -X POST "$DispatcherUrl/environments" `
   -H "Authorization: Bearer $Token" `
   -H "Content-Type: application/json" `
-  -d $bodyJson
+  --data-binary "@$bodyFile"
+Remove-Item $bodyFile -ErrorAction SilentlyContinue
 
 # Last line of $resp is the HTTP code; everything before is the body.
 $lines    = $resp -split "`n"
@@ -114,14 +144,14 @@ Write-Host "env_id     : $($env.env_id)"      -ForegroundColor Cyan
 Write-Host "vm_name    : $($env.vm_name)"     -ForegroundColor Cyan
 Write-Host "expires_at : $($env.expires_at)"  -ForegroundColor Cyan
 Write-Host ""
-Write-Host "URLs (token embedded — gateway sets cookie + 302s on first hit):"
+Write-Host "URLs (token embedded; gateway sets cookie + 302s on first hit):"
 Write-Host "  app       : $($env.public_urls.app)"
 Write-Host "  api       : $($env.public_urls.api)"
 Write-Host "  firestore : $($env.public_urls.firestore)"
 Write-Host ""
 
 if ($NoWait) {
-  Write-Host "(skipping wait — not polling for ready)" -ForegroundColor Yellow
+  Write-Host "(skipping wait; not polling for ready)" -ForegroundColor Yellow
   return
 }
 
@@ -136,7 +166,8 @@ while ((Get-Date) -lt $deadline) {
   $doc = curl.exe -sS "$DispatcherUrl/environments/$($env.env_id)" `
     -H "Authorization: Bearer $Token" | ConvertFrom-Json
   $elapsed = [int]((Get-Date) - $started).TotalSeconds
-  Write-Host ("  [{0,3}s] status={1} ip={2}" -f $elapsed, $doc.status, ($doc.vm_internal_ip ?? "-"))
+  $ipStr = if ($doc.vm_internal_ip) { $doc.vm_internal_ip } else { "-" }
+  Write-Host ("  [{0,3}s] status={1} ip={2}" -f $elapsed, $doc.status, $ipStr)
   if ($doc.status -eq "ready") {
     Write-Host ""
     Write-Host "==> ready in ${elapsed}s." -ForegroundColor Green
