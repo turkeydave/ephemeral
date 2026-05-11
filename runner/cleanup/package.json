@@ -1,0 +1,14 @@
+{
+  "name": "cleanup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "M4 cleanup worker. Cloud Scheduler hits POST /run every 5 minutes; the worker scans agent_environments for expired docs, deletes the corresponding Compute Engine VMs, and marks the docs deleted.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google-cloud/compute": "^4.10.0",
+    "@google-cloud/firestore": "^7.10.0"
+  }
+}

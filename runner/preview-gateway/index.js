@@ -105,7 +105,9 @@ async function lookupEnv(envId) {
 }
 
 // --------------------------------------------------------------------------
-// Resolve env_id -> { target, why } or { error: { code, message } }
+// Resolve env_id -> { target, why, expectedToken } or { error: { code, ... } }
+// `expectedToken` is null when the env doesn't require token auth (the
+// smoketest fallback path, or a legacy doc without access_token set).
 // --------------------------------------------------------------------------
 async function resolveTarget(envId) {
   // Firestore wins when present.
@@ -122,6 +124,7 @@ async function resolveTarget(envId) {
       return {
         target: `http://${doc.vm_internal_ip}:${VM_PORT}`,
         why: `firestore: status=ready vm=${doc.vm_internal_ip}`,
+        expectedToken: doc.access_token || null,
       };
     }
     if (status === 'launching') {
@@ -133,15 +136,107 @@ async function resolveTarget(envId) {
     return { error: { code: 502, message: `env ${envId} doc has unexpected status: ${status}` } };
   }
 
-  // Smoketest fallback for backwards compat with M2.
+  // Smoketest fallback for backwards compat with M2. Token-free.
   if (envId === 'smoketest' && VM_IP) {
     return {
       target: `http://${VM_IP}:${VM_PORT}`,
       why: `smoketest fallback to VM_IP env=${VM_IP}`,
+      expectedToken: null,
     };
   }
 
   return { error: { code: 404, message: `no environment registered for env_id=${envId}` } };
+}
+
+// --------------------------------------------------------------------------
+// Token enforcement
+// --------------------------------------------------------------------------
+// Browsers can land on the URL with `?token=...` exactly once; we set a
+// host-scoped cookie on first acceptance and immediately redirect to the
+// same URL minus the query so the token doesn't leak into history,
+// referrers, or downstream logs. Subsequent navigation + XHR / Firestore
+// long-poll requests carry the cookie automatically across the
+// `<env_id>-app|api|firestore.<lb-ip>.nip.io` sister hostnames because
+// we set the cookie domain to the parent (`.<lb-ip>.nip.io`).
+//
+// The cookie name embeds env_id so cookies for different envs don't
+// collide (browser sends them all; we only check the matching one).
+const COOKIE_PREFIX = 'ephem_token_';
+
+function parseCookieToken(req, envId) {
+  const raw = req.headers.cookie || '';
+  if (!raw) return null;
+  const wanted = COOKIE_PREFIX + envId;
+  for (const part of raw.split(';')) {
+    const [name, ...rest] = part.trim().split('=');
+    if (name === wanted) return decodeURIComponent(rest.join('='));
+  }
+  return null;
+}
+
+function parseQueryToken(req) {
+  const idx = req.url.indexOf('?');
+  if (idx < 0) return { token: null, urlWithoutToken: req.url };
+  const path = req.url.slice(0, idx);
+  const params = new URLSearchParams(req.url.slice(idx + 1));
+  const token = params.get('token');
+  if (token === null) return { token: null, urlWithoutToken: req.url };
+  params.delete('token');
+  const remaining = params.toString();
+  const urlWithoutToken = remaining ? `${path}?${remaining}` : path;
+  return { token, urlWithoutToken };
+}
+
+function cookieDomainFromHost(host) {
+  // host is like `e-abc-app.34-120-91-102.nip.io` (port already stripped
+  // by the time we use this). We want the parent shared by all sister
+  // subdomains: `.34-120-91-102.nip.io`. Strip the leading `<env>-<svc>`
+  // segment.
+  const dot = host.indexOf('.');
+  if (dot < 0) return null;
+  return host.slice(dot); // includes leading "."
+}
+
+// Returns:
+//   { ok: true }                                 token matched (cookie path)
+//   { ok: true, redirect: { location, cookie } } token matched via query;
+//                                                caller should 302 + Set-Cookie
+//   { ok: false, code, message }                 reject
+function checkToken(req, host, envId, expectedToken) {
+  // No token configured -> open access (smoketest fallback / legacy doc).
+  if (!expectedToken) return { ok: true };
+
+  // Cookie wins (cheap, never strips it from URL).
+  const cookieToken = parseCookieToken(req, envId);
+  if (cookieToken && cookieToken === expectedToken) return { ok: true };
+
+  // Otherwise look for ?token=... in the query string.
+  const { token: queryToken, urlWithoutToken } = parseQueryToken(req);
+  if (queryToken && queryToken === expectedToken) {
+    const domain = cookieDomainFromHost(host.split(':')[0]);
+    // 1 day max-age — environments are short-lived; the cleanup worker
+    // reaps them inside the TTL anyway.
+    const cookieParts = [
+      `${COOKIE_PREFIX}${envId}=${encodeURIComponent(expectedToken)}`,
+      'Path=/',
+      'Max-Age=86400',
+      'SameSite=Lax',
+      'HttpOnly',
+    ];
+    if (domain) cookieParts.push(`Domain=${domain}`);
+    return {
+      ok: true,
+      redirect: {
+        location: urlWithoutToken,
+        cookie:   cookieParts.join('; '),
+      },
+    };
+  }
+
+  if (queryToken || cookieToken) {
+    return { ok: false, code: 403, message: `invalid preview token for env ${envId}` };
+  }
+  return { ok: false, code: 401, message: `preview token required for env ${envId} (use the URL returned by the dispatcher)` };
 }
 
 // --------------------------------------------------------------------------
@@ -198,6 +293,21 @@ const server = http.createServer(async (req, res) => {
     return res.end(`preview-gateway: ${result.error.message}\n`);
   }
 
+  // M4: token check.
+  const auth = checkToken(req, host, envId, result.expectedToken);
+  if (!auth.ok) {
+    res.writeHead(auth.code, { 'content-type': 'text/plain' });
+    return res.end(`preview-gateway: ${auth.message}\n`);
+  }
+  if (auth.redirect) {
+    res.writeHead(302, {
+      'location':   auth.redirect.location,
+      'set-cookie': auth.redirect.cookie,
+      'cache-control': 'no-store',
+    });
+    return res.end();
+  }
+
   console.log(`[preview-gateway] ${req.method} ${host}${req.url} env=${envId} -> ${result.target} (${result.why})`);
   proxy.web(req, res, { target: result.target });
 });
@@ -208,7 +318,8 @@ const server = http.createServer(async (req, res) => {
 // stack — the Caddy edge proxy already streams long-polls fine).
 // --------------------------------------------------------------------------
 server.on('upgrade', async (req, socket, head) => {
-  const envId = parseEnvId(req.headers.host || '');
+  const host = req.headers.host || '';
+  const envId = parseEnvId(host);
   if (!envId) {
     socket.destroy();
     return;
@@ -218,6 +329,15 @@ server.on('upgrade', async (req, socket, head) => {
     if (result.error || !result.target) {
       socket.destroy();
       return;
+    }
+    // For websocket upgrades we only honor the cookie path (no
+    // ?token=...+302 dance — there's no useful response to negotiate).
+    if (result.expectedToken) {
+      const cookieToken = parseCookieToken(req, envId);
+      if (cookieToken !== result.expectedToken) {
+        socket.destroy();
+        return;
+      }
     }
     proxy.ws(req, socket, head, { target: result.target });
   } catch (e) {

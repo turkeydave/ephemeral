@@ -58,7 +58,8 @@ $Images = @(
   @{ Name = "firebase-emulator-seeded";   Dockerfile = "firebase-emulator/Dockerfile.cloud"; Context = "." },
   @{ Name = "edge-proxy";                 Dockerfile = "edge-proxy/Dockerfile";              Context = "edge-proxy" },
   @{ Name = "preview-gateway";            Dockerfile = "runner/preview-gateway/Dockerfile";  Context = "runner/preview-gateway" },
-  @{ Name = "dispatcher";                 Dockerfile = "runner/dispatcher/Dockerfile";       Context = "runner/dispatcher" }
+  @{ Name = "dispatcher";                 Dockerfile = "runner/dispatcher/Dockerfile";       Context = "runner/dispatcher" },
+  @{ Name = "cleanup";                    Dockerfile = "runner/cleanup/Dockerfile";          Context = "runner/cleanup" }
 )
 
 foreach ($img in $Images) {

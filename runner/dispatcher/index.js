@@ -109,12 +109,23 @@ function mintEnvId() {
   return 'e-' + crypto.randomBytes(4).toString('hex');
 }
 
-function publicUrls(envId) {
+function mintAccessToken() {
+  // 32 hex chars = 128 bits. The gateway accepts this either via a
+  // `?token=...` query param on the *first* request (it sets a cookie
+  // and 302s to the same URL minus the token) or via the cookie
+  // thereafter. See preview-gateway/index.js.
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function publicUrls(envId, token) {
   const base = `${envId}-{svc}.${LB_IP_DASHED}.nip.io`;
+  // The token query param is only needed on the first request — the
+  // gateway sets a cookie and strips it on the redirect.
+  const q = token ? `?token=${encodeURIComponent(token)}` : '';
   return {
-    app:       `http://${base.replace('{svc}', 'app')}/`,
-    api:       `http://${base.replace('{svc}', 'api')}/`,
-    firestore: `http://${base.replace('{svc}', 'firestore')}/`,
+    app:       `http://${base.replace('{svc}', 'app')}/${q}`,
+    api:       `http://${base.replace('{svc}', 'api')}/${q}`,
+    firestore: `http://${base.replace('{svc}', 'firestore')}/${q}`,
   };
 }
 
@@ -202,6 +213,7 @@ async function handleCreateEnv(req, res) {
   const envId    = mintEnvId();
   const vmName   = `${VM_NAME_PREFIX}${envId.slice(2)}`;
   const expires  = new Date(Date.now() + ttlSec * 1000);
+  const accessToken = mintAccessToken();
 
   const docRef = firestore.collection(COLLECTION).doc(envId);
 
@@ -210,15 +222,16 @@ async function handleCreateEnv(req, res) {
   //    we won't have an orphan VM nobody knows about.
   try {
     await docRef.set({
-      env_id:     envId,
-      status:     'launching',
-      vm_name:    vmName,
-      vm_zone:    ZONE,
-      repo_url:   repoUrl,
-      branch:     branch,
-      image_tag:  imageTag,
-      created_at: FieldValue.serverTimestamp(),
-      expires_at: expires,
+      env_id:       envId,
+      status:       'launching',
+      vm_name:      vmName,
+      vm_zone:      ZONE,
+      repo_url:     repoUrl,
+      branch:       branch,
+      image_tag:    imageTag,
+      access_token: accessToken,
+      created_at:   FieldValue.serverTimestamp(),
+      expires_at:   expires,
     });
   } catch (e) {
     console.error(`[dispatcher] firestore write failed env=${envId}: ${e.message}`);
@@ -251,12 +264,13 @@ async function handleCreateEnv(req, res) {
 
   console.log(`[dispatcher] created env=${envId} vm=${vmName} repo=${repoUrl}@${branch} tag=${imageTag}`);
   return sendJson(res, 201, {
-    env_id:      envId,
-    vm_name:     vmName,
-    vm_zone:     ZONE,
-    status:      'launching',
-    expires_at:  expires.toISOString(),
-    public_urls: publicUrls(envId),
+    env_id:       envId,
+    vm_name:      vmName,
+    vm_zone:      ZONE,
+    status:       'launching',
+    expires_at:   expires.toISOString(),
+    access_token: accessToken,
+    public_urls:  publicUrls(envId, accessToken),
   });
 }
 
@@ -271,7 +285,7 @@ async function handleGetEnv(req, res, envId) {
       created_at: data.created_at?.toDate?.().toISOString() || null,
       ready_at:   data.ready_at?.toDate?.().toISOString()   || null,
       expires_at: data.expires_at?.toDate?.().toISOString() || data.expires_at,
-      public_urls: publicUrls(envId),
+      public_urls: publicUrls(envId, data.access_token),
     });
   } catch (e) {
     return sendJson(res, 500, { error: e.message });
