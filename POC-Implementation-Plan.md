@@ -22,8 +22,8 @@ Authoritative design references (in `agentic-cloud-runner_VM_OPT/`):
 | **M1**    | **✅ Done.** Stack runs on Compute Engine VM, edge proxy routes by host header, full Firestore→Function→PubSub→relay→API→Postgres chain proven. See [MILESTONE-1-RUNBOOK.md](./MILESTONE-1-RUNBOOK.md). |
 | **M2**    | **✅ Done.** Global HTTP LB + Cloud Run preview-gateway forwards to the M1 VM over Direct VPC egress. VM is now reachable only via the LB path (M1's wide-open `:8080` firewall removed). See [MILESTONE-2-RUNBOOK.md](./MILESTONE-2-RUNBOOK.md). |
 | **M3**    | **✅ Done.** Cloud Run dispatcher creates per-env VMs and writes the Firestore env registry; gateway resolves `<env_id>` from the Host header against `agent_environments/<env_id>` (5s cache); VM startup script patches the doc to `status=ready` once the stack is live. See [MILESTONE-3-RUNBOOK.md](./MILESTONE-3-RUNBOOK.md). |
-| **M4**    | **Next.** Cleanup worker + IAP/token gating + small CLI helper.         |
-| M5        | Not started. Snapshot data disk + Pub/Sub front + agentic mode skeleton. |
+| **M4**    | **✅ Done.** Cloud Scheduler + Cloud Run cleanup worker reaps expired VMs every 5min; gateway enforces a per-env access_token via cookie/query auth; dispatcher invocation locked to a `cli-caller` SA via human → SA impersonation; `scripts/preview.ps1` wraps the whole flow. See [MILESTONE-4-RUNBOOK.md](./MILESTONE-4-RUNBOOK.md). |
+| **M5**    | **Next.** Snapshot data disk + Pub/Sub front + agentic mode skeleton (per the [agentic mode design](#agentic-mode-design) added during M4 planning). |
 
 **M2 plan** (see also [§9 below](#milestone-2--public-ingress)):
 
@@ -321,15 +321,26 @@ fallback for backwards compat).
 See [MILESTONE-3-RUNBOOK.md](./MILESTONE-3-RUNBOOK.md) for the as-built
 status table and the "Gotchas captured during M3" section.
 
-### Milestone 4 — Cleanup + safety
+### Milestone 4 — Cleanup + safety — **✅ DONE**
 
-15. Cloud Scheduler → Cloud Run cleanup (every 5 min): for any
-    `expires_at < now` and `status in (ready, expired)`, delete VM +
-    disk and mark `deleted`.
-16. Add IAP on the LB backend (gateway). Restrict to your Google
-    account / a Workspace group.
-17. Add a small CLI (`scripts/preview.ps1`) to call the dispatcher and
-    open the URL. ✅ "request → URL → click → app" repeatable.
+End-to-end: cleanup worker (Cloud Run, internal-only ingress) is
+invoked every 5 minutes by Cloud Scheduler; it deletes any VM whose
+`expires_at` has passed and marks the registry doc `status=deleted`.
+The preview gateway requires a per-env `access_token` (minted by the
+dispatcher, cookie-or-query auth, 302+Set-Cookie on first hit so the
+token is stripped from the URL after the first request). Dispatcher
+invocation is locked to a `cli-caller` SA: human callers impersonate it
+via `roles/iam.serviceAccountTokenCreator` rather than holding
+`run.invoker` directly. The `scripts/preview.ps1` helper wraps the
+full flow (impersonation → POST → poll → open browser).
+
+IAP is **deferred to M5** as called out in §10 — IAP requires HTTPS,
+which is gated on getting a real domain + cert (the M5 work item).
+Token gating is the M1-M4 substitute and is functionally equivalent for
+a single-user POC.
+
+See [MILESTONE-4-RUNBOOK.md](./MILESTONE-4-RUNBOOK.md) for the as-built
+status table and the "Gotchas captured during M4" section.
 
 ### Milestone 5 — Polish & alignment with design
 
@@ -417,9 +428,11 @@ When this plan is complete you should have:
 - [x] VM startup script writes registry doc on `/healthz` (Firestore REST PATCH from bash via metadata-server token)
 - [x] Preview gateway resolves `<env_id>` from Host header against Firestore, with 5s cache + smoketest fallback to `VM_IP` env var
 - [x] M3 end-to-end: `POST /environments` → e-b886e5f0 → ~2.5min → app/api/firestore all 200 through gateway
-- [ ] Cloud Run cleanup worker (`runner/cleanup/`) — M4
-- [ ] CLI helper (`scripts/preview.ps1`) — M4
-- [ ] Cleanup deletes VM + disk on TTL expiry — M4
+- [x] Cloud Run cleanup worker ([runner/cleanup/](file:///c:/Users/kilmo/development/ephemeral/runner/cleanup)) — M4 deployed; Cloud Scheduler invokes POST /run every 5min
+- [x] CLI helper ([scripts/preview.ps1](file:///c:/Users/kilmo/development/ephemeral/scripts/preview.ps1)) — M4; SA impersonation auth, polls until ready, opens browser
+- [x] Per-env access_token gating in the gateway — cookie/query auth with 302+Set-Cookie strip on first hit
+- [x] Dispatcher invocation locked to `ephem-runner-cli-caller` SA; humans impersonate via `iam.serviceAccountTokenCreator`
+- [x] M4 end-to-end: `preview.ps1` mints `e-811c8619` in 140s; cleanup sweep deleted leftover M3 env on TTL
 
 ## 13. What we will NOT touch in this POC
 
