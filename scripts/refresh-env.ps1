@@ -98,9 +98,18 @@ $compose  = "sudo docker compose -f $workdir/docker-compose.cloud.yml --env-file
 $parts    = @()
 
 if (-not $NoPull) {
-  # Shallow pull so the clone stays --depth=1. The branch was pinned at
-  # `git clone --branch <branch>` time in startup.sh and is still HEAD.
-  $parts += "echo '==> git pull' && sudo git -C $workdir pull --depth=1"
+  # Fetch + hard-reset (instead of `git pull`) for three reasons:
+  #   1. shallow clones don't fast-forward cleanly — the local commit
+  #      may not be reachable through the depth-1 history boundary, so
+  #      `pull --ff-only` reports "Not possible to fast-forward"
+  #   2. handles dirty working trees (e.g. operator scp'd a file in for
+  #      a one-off test) — we always want the VM to reflect origin
+  #   3. handles force-pushes on feature branches without merge conflicts
+  # Branch name is read from HEAD on the VM (set by `git clone --branch
+  # <branch>` in startup.sh) so we don't need to know it client-side.
+  $parts += "echo '==> git fetch + reset --hard origin/HEAD' && " +
+            "sudo bash -c 'cd $workdir && B=`$(git rev-parse --abbrev-ref HEAD) && " +
+            "git fetch --depth=1 origin `"`$B`" && git reset --hard `"origin/`$B`"'"
 }
 
 switch ($Service) {
