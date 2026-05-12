@@ -101,50 +101,80 @@ const API_BASE = (() => {
 console.info(`api base: ${API_BASE}`);
 
 // ----- DOM -----
-const tasksEl = document.getElementById('tasks');
-const historyEl = document.getElementById('history');
-const form = document.getElementById('task-form');
-const submitBtn = document.getElementById('submit-btn');
-const cancelBtn = document.getElementById('cancel-btn');
-const editingBanner = document.getElementById('editing-banner');
+const tasksEl         = document.getElementById('tasks');
+const tasksCountEl    = document.getElementById('tasks-count');
+const historyEl       = document.getElementById('history');
+const historyCountEl  = document.getElementById('history-count');
+const form            = document.getElementById('task-form');
+const submitBtn       = document.getElementById('submit-btn');
+const cancelBtn       = document.getElementById('cancel-btn');
+const editingBanner   = document.getElementById('editing-banner');
+const reloadTasksBtn  = document.getElementById('reload-tasks-btn');
 const viewProductsBtn = document.getElementById('view-products-btn');
-const productsDialog = document.getElementById('products-dialog');
-const productsEl = document.getElementById('products');
-const viewPgHistoryBtn = document.getElementById('view-pg-history-btn');
-const pgHistoryDialog = document.getElementById('pg-history-dialog');
-const pgHistoryEl = document.getElementById('pg-history');
+const productsEl      = document.getElementById('products');
+const productsCountEl = document.getElementById('products-count');
+const viewPgHistoryBtn   = document.getElementById('view-pg-history-btn');
+const pgHistoryEl        = document.getElementById('pg-history');
+const pgHistoryCountEl   = document.getElementById('pg-history-count');
+const envInfoEl          = document.getElementById('env-info');
+
+if (envInfoEl) {
+  // Show env_id parsed from the host so it's obvious which preview env
+  // you're looking at — handy when you have several open.
+  const m = window.location.hostname.match(/^([^.]+)-(?:app|api|firestore)\./);
+  envInfoEl.textContent = m ? `env=${m[1]}` : '';
+}
 
 let editingId = null;
+
+function setCount(el, n) { if (el) el.textContent = (typeof n === 'number') ? String(n) : '—'; }
 
 // ----- Tasks list (one-shot, refreshed after add/edit) -----
 async function loadTasks() {
   tasksEl.textContent = 'Loading…';
-  const q = query(collection(db, 'tasks'), orderBy('updatedAt', 'desc'), limit(50));
-  const snap = await getDocs(q);
-  if (snap.empty) {
-    tasksEl.textContent = 'No tasks found.';
-    return;
+  setCount(tasksCountEl, null);
+  try {
+    const q = query(collection(db, 'tasks'), orderBy('updatedAt', 'desc'), limit(50));
+    const snap = await getDocs(q);
+    if (snap.empty) {
+      tasksEl.innerHTML = '<div class="placeholder"><strong>No tasks yet</strong><div>Add one above to get started.</div></div>';
+      setCount(tasksCountEl, 0);
+      return;
+    }
+    tasksEl.innerHTML = '';
+    snap.forEach(d => tasksEl.appendChild(renderTaskCard(d.id, d.data())));
+    setCount(tasksCountEl, snap.size);
+  } catch (err) {
+    tasksEl.innerHTML = `<div class="error">Failed to load tasks: ${escapeHtml(err.message)}</div>`;
   }
-  tasksEl.innerHTML = '';
-  snap.forEach(d => tasksEl.appendChild(renderTaskRow(d.id, d.data())));
 }
 
-function renderTaskRow(id, data) {
-  const row = document.createElement('div');
-  row.className = 'task';
-  row.innerHTML = `
-    <strong>${escapeHtml(data.title || '(untitled)')}</strong>
-    <span class="pill">${escapeHtml(data.status || '')}</span>
-    <span class="pill">${escapeHtml(data.priority || '')}</span>
-    <span class="muted">${escapeHtml(id)}</span>
+function statusClass(s)   { return 'status-' + (s || '').replace(/[^a-z-]/gi, ''); }
+function priorityClass(p) { return 'prio-'   + (p || '').replace(/[^a-z]/gi, ''); }
+function opClass(o)       { return 'op-'     + (o || '').replace(/[^a-z]/gi, ''); }
+
+function renderTaskCard(id, data) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="card-title">
+      <span>${escapeHtml(data.title || '(untitled)')}</span>
+    </div>
+    <div class="card-meta">
+      <span class="pill ${statusClass(data.status)}">${escapeHtml(data.status || 'open')}</span>
+      <span class="pill ${priorityClass(data.priority)}">${escapeHtml(data.priority || 'medium')}</span>
+    </div>
+    <div class="card-foot">${escapeHtml(id)}</div>
   `;
   const editBtn = document.createElement('button');
   editBtn.type = 'button';
   editBtn.textContent = 'Edit';
   editBtn.addEventListener('click', () => beginEdit(id, data));
-  row.appendChild(editBtn);
-  return row;
+  card.querySelector('.card-title').appendChild(editBtn);
+  return card;
 }
+
+reloadTasksBtn.addEventListener('click', () => { loadTasks(); });
 
 // ----- Add / Edit -----
 form.addEventListener('submit', async (e) => {
@@ -203,30 +233,45 @@ function subscribeHistory() {
   const q = query(collection(db, 'taskHistory'), orderBy('updatedAt', 'desc'), limit(50));
   onSnapshot(q, (snap) => {
     if (snap.empty) {
-      historyEl.textContent = 'No history yet.';
+      historyEl.innerHTML = '<div class="placeholder"><strong>No history yet</strong><div>Edit a task to fire a Firestore trigger.</div></div>';
+      setCount(historyCountEl, 0);
       return;
     }
     historyEl.innerHTML = '';
-    snap.forEach(d => historyEl.appendChild(renderHistoryEntry(d.id, d.data())));
+    snap.forEach(d => historyEl.appendChild(renderHistoryCard(d.id, d.data())));
+    setCount(historyCountEl, snap.size);
   }, (err) => {
-    historyEl.textContent = 'History subscription error: ' + err.message;
+    historyEl.innerHTML = `<div class="error">History subscription error: ${escapeHtml(err.message)}</div>`;
   });
 }
 
-function renderHistoryEntry(id, data) {
-  const row = document.createElement('div');
-  row.className = 'entry';
+function renderHistoryCard(id, data) {
+  const card = document.createElement('div');
+  card.className = 'card';
   const ts = data.updatedAt && data.updatedAt.toDate
     ? data.updatedAt.toDate().toISOString().replace('T', ' ').slice(0, 19)
     : '—';
+  const op = data.op || 'update';
   const diffs = computeDiffs(data.before || {}, data.after || {});
-  row.innerHTML = `
-    <span class="muted">${escapeHtml(ts)}</span>
-    <span class="pill">${escapeHtml(data.op || 'update')}</span>
-    <strong>${escapeHtml(data.taskId || '')}</strong>
-    <span class="diff">${diffs.length ? diffs.map(escapeHtml).join(' · ') : '(no field changes)'}</span>
+  card.innerHTML = `
+    <div class="card-title">
+      <span>${escapeHtml(data.taskId || '(no taskId)')}</span>
+    </div>
+    <div class="card-meta">
+      <span class="pill ${opClass(op)}">${escapeHtml(op)}</span>
+      <span class="muted">${escapeHtml(ts)}</span>
+    </div>
+    <div class="diff">${renderDiffs(diffs)}</div>
   `;
-  return row;
+  return card;
+}
+
+function renderDiffs(diffs) {
+  if (!diffs.length) return '<span class="muted">(no field changes)</span>';
+  return diffs.map(d => {
+    const safe = escapeHtml(d);
+    return safe.replace('→', '<span class="arrow">→</span>');
+  }).join('<br>');
 }
 
 function computeDiffs(before, after) {
@@ -255,9 +300,11 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-// ----- Products (loaded from Express API on demand) -----
+// ----- Products (loaded from Express API on demand into the top-right quadrant) -----
 async function loadProducts() {
-  productsEl.textContent = 'Loading…';
+  productsEl.innerHTML = '<div class="placeholder">Loading…</div>';
+  setCount(productsCountEl, null);
+  viewProductsBtn.disabled = true;
   try {
     // credentials: 'include' so the ephem_token_<env> cookie set by the
     // preview-gateway on the app origin travels to the api sister origin.
@@ -268,68 +315,82 @@ async function loadProducts() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const { products } = await res.json();
     if (!products || !products.length) {
-      productsEl.textContent = 'No products.';
+      productsEl.innerHTML = '<div class="placeholder"><strong>No products</strong></div>';
+      setCount(productsCountEl, 0);
       return;
     }
     productsEl.innerHTML = '';
     for (const p of products) {
-      const row = document.createElement('div');
-      row.style.cssText = 'padding:8px 0; border-bottom:1px solid #eee;';
-      row.innerHTML = `
-        <div><strong>${escapeHtml(p.name)}</strong>
-          <span class="pill">$${escapeHtml(p.price)}</span></div>
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div class="card-title">
+          <span>${escapeHtml(p.name)}</span>
+        </div>
+        <div class="card-meta">
+          <span class="pill">$${escapeHtml(p.price)}</span>
+        </div>
         <div class="muted">${escapeHtml(p.description || '')}</div>
+        <div class="card-foot">id #${p.id}</div>
       `;
-      productsEl.appendChild(row);
+      productsEl.appendChild(card);
     }
+    setCount(productsCountEl, products.length);
   } catch (err) {
-    productsEl.textContent = 'Failed to load products: ' + err.message;
+    productsEl.innerHTML = `<div class="error">Failed to load products: ${escapeHtml(err.message)}</div>`;
+  } finally {
+    viewProductsBtn.disabled = false;
+    viewProductsBtn.textContent = 'Reload Products';
   }
 }
 
-viewProductsBtn.addEventListener('click', () => {
-  productsDialog.showModal();
-  loadProducts();
-});
+viewProductsBtn.addEventListener('click', loadProducts);
 
 // ----- Postgres-replicated task history (loaded from API on demand) -----
 async function loadPgHistory() {
-  pgHistoryEl.textContent = 'Loading…';
+  pgHistoryEl.innerHTML = '<div class="placeholder">Loading…</div>';
+  setCount(pgHistoryCountEl, null);
+  viewPgHistoryBtn.disabled = true;
   try {
     const res = await fetch(`${API_BASE}/history`, { credentials: 'include' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const { history } = await res.json();
     if (!history || !history.length) {
-      pgHistoryEl.textContent = 'No replicated history rows yet.';
+      pgHistoryEl.innerHTML = '<div class="placeholder"><strong>No replicated rows yet</strong><div>Edit a task to fire the trigger → Pub/Sub → relay → Postgres pipeline.</div></div>';
+      setCount(pgHistoryCountEl, 0);
       return;
     }
     pgHistoryEl.innerHTML = '';
     for (const h of history) {
-      const row = document.createElement('div');
-      row.style.cssText = 'padding:6px 0; border-bottom:1px solid #eee;';
+      const card = document.createElement('div');
+      card.className = 'card';
       const occurred = h.occurred_at ? new Date(h.occurred_at).toISOString().replace('T', ' ').slice(0, 19) : '—';
+      const op = h.op || 'update';
       const diffs = computeDiffs(h.before_data || {}, h.after_data || {});
-      row.innerHTML = `
-        <div>
+      card.innerHTML = `
+        <div class="card-title">
+          <span>${escapeHtml(h.task_id || '(no taskId)')}</span>
+        </div>
+        <div class="card-meta">
+          <span class="pill ${opClass(op)}">${escapeHtml(op)}</span>
           <span class="muted">${escapeHtml(occurred)}</span>
-          <span class="pill">${escapeHtml(h.op || '')}</span>
-          <strong>${escapeHtml(h.task_id || '')}</strong>
           <span class="muted">#${h.id}</span>
         </div>
-        <div class="diff">${diffs.length ? diffs.map(escapeHtml).join(' · ') : '(no field changes)'}</div>
+        <div class="diff">${renderDiffs(diffs)}</div>
       `;
-      pgHistoryEl.appendChild(row);
+      pgHistoryEl.appendChild(card);
     }
+    setCount(pgHistoryCountEl, history.length);
   } catch (err) {
-    pgHistoryEl.textContent = 'Failed to load Postgres history: ' + err.message;
+    pgHistoryEl.innerHTML = `<div class="error">Failed to load Postgres history: ${escapeHtml(err.message)}</div>`;
+  } finally {
+    viewPgHistoryBtn.disabled = false;
+    viewPgHistoryBtn.textContent = 'Reload History';
   }
 }
 
-viewPgHistoryBtn.addEventListener('click', () => {
-  pgHistoryDialog.showModal();
-  loadPgHistory();
-});
+viewPgHistoryBtn.addEventListener('click', loadPgHistory);
 
 // ----- boot -----
-loadTasks().catch(err => { tasksEl.textContent = 'Error loading tasks: ' + err.message; });
+loadTasks().catch(err => { tasksEl.innerHTML = `<div class="error">Error loading tasks: ${escapeHtml(err.message)}</div>`; });
 subscribeHistory();

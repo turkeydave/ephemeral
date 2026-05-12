@@ -5,49 +5,191 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Firebase Tasks (Prototype)</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 20px; max-width: 900px; }
-      h1, h2 { font-size: 1.2rem; margin-top: 1.5rem; }
-      form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-             padding: 12px; background: #f6f8fa; border: 1px solid #e1e4e8;
-             border-radius: 6px; margin-bottom: 12px; }
-      form input, form select, form button { padding: 6px 8px; font-size: 0.9rem; }
-      form input[name="title"] { flex: 1; min-width: 220px; }
-      .editing-banner { color: #b08800; font-size: 0.85rem; }
-      #tasks .task, #history .entry {
-        padding: 8px; border-bottom: 1px solid #eee;
-        display: flex; gap: 8px; align-items: baseline;
+      :root {
+        --bg: #f6f8fa;
+        --panel-bg: #ffffff;
+        --border: #d0d7de;
+        --border-soft: #e1e4e8;
+        --muted: #6a737d;
+        --accent: #0969da;
+        --accent-soft: #ddf4ff;
+        --warn: #b08800;
+        --pill-bg: #eaecef;
+        --pill-status-open: #cff7d3;
+        --pill-status-in-progress: #fff5b1;
+        --pill-status-blocked: #ffd7d5;
+        --pill-status-done: #d8dee4;
+        --pill-prio-high: #ffd7d5;
+        --pill-prio-medium: #fff5b1;
+        --pill-prio-low: #d8dee4;
+        --shadow: 0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.04);
       }
-      #tasks .task button { margin-left: auto; }
-      .muted { color: #6a737d; font-size: 0.85rem; }
-      .pill { display: inline-block; padding: 1px 6px; border-radius: 10px;
-              font-size: 0.75rem; background: #eaecef; }
-      .diff { font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; }
+      * { box-sizing: border-box; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+        margin: 0; padding: 16px;
+        background: var(--bg); color: #24292f;
+      }
+      h1 { font-size: 1.3rem; margin: 0; }
+      h2 { font-size: 0.95rem; margin: 0; font-weight: 600; }
+
+      /* ---------- top bar ---------- */
+      .topbar {
+        display: flex; align-items: center; gap: 12px;
+        margin-bottom: 12px; flex-wrap: wrap;
+      }
+      .topbar button {
+        padding: 6px 12px; font-size: 0.85rem;
+        background: var(--panel-bg); color: var(--accent);
+        border: 1px solid var(--border); border-radius: 6px;
+        cursor: pointer;
+      }
+      .topbar button:hover { background: var(--accent-soft); }
+
+      form#task-form {
+        display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+        padding: 12px; background: var(--panel-bg);
+        border: 1px solid var(--border); border-radius: 8px;
+        margin-bottom: 16px; box-shadow: var(--shadow);
+      }
+      form#task-form input,
+      form#task-form select,
+      form#task-form button {
+        padding: 6px 10px; font-size: 0.9rem;
+        border: 1px solid var(--border); border-radius: 6px;
+        background: var(--panel-bg);
+      }
+      form#task-form input[name="title"] { flex: 1; min-width: 220px; }
+      form#task-form button[type="submit"] {
+        background: var(--accent); color: white; border-color: var(--accent);
+        cursor: pointer;
+      }
+      form#task-form button[type="submit"]:hover { background: #0860c5; }
+      form#task-form button[type="button"] {
+        cursor: pointer;
+      }
+      .editing-banner { color: var(--warn); font-size: 0.85rem; }
+
+      /* ---------- 4-quadrant grid ---------- */
+      .quadrants {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: minmax(280px, 1fr) minmax(280px, 1fr);
+        gap: 16px;
+      }
+      @media (max-width: 900px) {
+        .quadrants { grid-template-columns: 1fr; }
+      }
+
+      .panel {
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        display: flex; flex-direction: column;
+        min-height: 0; /* allow inner overflow */
+      }
+      .panel > header {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-soft);
+        background: var(--bg);
+        border-radius: 8px 8px 0 0;
+      }
+      .panel > header .count {
+        font-size: 0.75rem; color: var(--muted);
+        background: var(--pill-bg); padding: 2px 8px; border-radius: 10px;
+      }
+      .panel > header .spacer { flex: 1; }
+      .panel > header button {
+        padding: 4px 10px; font-size: 0.8rem;
+        background: var(--panel-bg); color: var(--accent);
+        border: 1px solid var(--border); border-radius: 6px;
+        cursor: pointer;
+      }
+      .panel > header button:hover { background: var(--accent-soft); }
+
+      .panel > .body {
+        padding: 12px; overflow: auto; flex: 1; min-height: 0;
+      }
+
+      /* ---------- card grids ---------- */
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 10px;
+      }
+      .card {
+        background: var(--panel-bg);
+        border: 1px solid var(--border-soft);
+        border-radius: 6px;
+        padding: 10px 12px;
+        display: flex; flex-direction: column; gap: 6px;
+        font-size: 0.88rem;
+      }
+      .card-title {
+        font-weight: 600; word-break: break-word;
+        display: flex; align-items: center; gap: 6px;
+      }
+      .card-title button {
+        margin-left: auto; padding: 2px 8px; font-size: 0.75rem;
+        border: 1px solid var(--border); background: var(--panel-bg);
+        color: var(--accent); border-radius: 4px; cursor: pointer;
+      }
+      .card-title button:hover { background: var(--accent-soft); }
+      .card-meta {
+        display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+      }
+      .card-foot {
+        font-size: 0.75rem; color: var(--muted); word-break: break-all;
+      }
+
+      /* ---------- pills ---------- */
+      .pill {
+        display: inline-block; padding: 1px 8px; border-radius: 10px;
+        font-size: 0.72rem; background: var(--pill-bg);
+        white-space: nowrap;
+      }
+      .pill.status-open        { background: var(--pill-status-open); }
+      .pill.status-in-progress { background: var(--pill-status-in-progress); }
+      .pill.status-blocked     { background: var(--pill-status-blocked); }
+      .pill.status-done        { background: var(--pill-status-done); }
+      .pill.prio-low    { background: var(--pill-prio-low); }
+      .pill.prio-medium { background: var(--pill-prio-medium); }
+      .pill.prio-high   { background: var(--pill-prio-high); }
+      .pill.op-create  { background: var(--pill-status-open); }
+      .pill.op-update  { background: var(--pill-status-in-progress); }
+      .pill.op-delete  { background: var(--pill-status-blocked); }
+
+      .muted { color: var(--muted); font-size: 0.8rem; }
+      .diff {
+        font-family: ui-monospace, "SF Mono", Consolas, monospace;
+        font-size: 0.75rem; color: #24292f;
+        word-break: break-word; line-height: 1.4;
+      }
+      .diff .arrow { color: var(--accent); padding: 0 2px; }
+
+      /* ---------- placeholder ---------- */
+      .placeholder {
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center; height: 100%; min-height: 180px;
+        color: var(--muted); font-size: 0.85rem; text-align: center;
+        padding: 20px; gap: 8px;
+      }
+      .placeholder strong { color: #24292f; font-weight: 600; }
+
+      /* ---------- error ---------- */
+      .error {
+        color: #b91c1c; background: #ffd7d5;
+        padding: 10px; border-radius: 6px; font-size: 0.85rem;
+      }
     </style>
   </head>
   <body>
-    <div style="display:flex; align-items:center; gap:12px;">
-      <h1 style="margin:0;">Tasks</h1>
-      <button type="button" id="view-products-btn">View Products</button>
-      <button type="button" id="view-pg-history-btn">View History (Postgres)</button>
+    <div class="topbar">
+      <h1>Tasks</h1>
+      <span class="muted" id="env-info"></span>
     </div>
-
-    <dialog id="products-dialog" style="min-width:420px; border:1px solid #d0d7de; border-radius:8px; padding:0;">
-      <form method="dialog" style="margin:0; background:#f6f8fa; border-bottom:1px solid #e1e4e8;
-                                    padding:8px 12px; display:flex; align-items:center; gap:8px;">
-        <strong style="flex:1;">Products</strong>
-        <button value="close">Close</button>
-      </form>
-      <div id="products" style="padding:12px;">Loading…</div>
-    </dialog>
-
-    <dialog id="pg-history-dialog" style="min-width:560px; max-width:90vw; border:1px solid #d0d7de; border-radius:8px; padding:0;">
-      <form method="dialog" style="margin:0; background:#f6f8fa; border-bottom:1px solid #e1e4e8;
-                                    padding:8px 12px; display:flex; align-items:center; gap:8px;">
-        <strong style="flex:1;">Task History (replicated to Postgres via Pub/Sub)</strong>
-        <button value="close">Close</button>
-      </form>
-      <div id="pg-history" style="padding:12px; max-height:60vh; overflow:auto;">Loading…</div>
-    </dialog>
 
     <form id="task-form">
       <input name="title" placeholder="Title" required />
@@ -67,12 +209,73 @@
       <span id="editing-banner" class="editing-banner" hidden></span>
     </form>
 
-    <h2>Top 50 Tasks</h2>
-    <div id="tasks">Loading…</div>
+    <div class="quadrants">
+      <!-- top-left: Top 50 tasks (Firestore one-shot) -->
+      <section class="panel">
+        <header>
+          <h2>Top 50 Tasks</h2>
+          <span class="count" id="tasks-count">—</span>
+          <span class="spacer"></span>
+          <button type="button" id="reload-tasks-btn" title="Reload">↻ Reload</button>
+        </header>
+        <div class="body">
+          <div id="tasks" class="cards">Loading…</div>
+        </div>
+      </section>
 
-    <h2>Task History (live)</h2>
-    <div id="history">Subscribing…</div>
+      <!-- top-right: Products (placeholder until View Products clicked) -->
+      <section class="panel">
+        <header>
+          <h2>Products</h2>
+          <span class="count" id="products-count">—</span>
+          <span class="spacer"></span>
+          <button type="button" id="view-products-btn">View Products</button>
+        </header>
+        <div class="body">
+          <div id="products" class="cards">
+            <div class="placeholder">
+              <strong>Products grid</strong>
+              <div>Click <em>View Products</em> to load from the Express API
+                (<code>GET /products</code>).</div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    <script type="module" src="./main.js?v=7"></script>
+      <!-- bottom-left: live task history (Firestore subscription) -->
+      <section class="panel">
+        <header>
+          <h2>Task History (live)</h2>
+          <span class="count" id="history-count">—</span>
+          <span class="spacer"></span>
+          <span class="muted">Firestore <code>onSnapshot</code></span>
+        </header>
+        <div class="body">
+          <div id="history" class="cards">Subscribing…</div>
+        </div>
+      </section>
+
+      <!-- bottom-right: Postgres-replicated history (placeholder until clicked) -->
+      <section class="panel">
+        <header>
+          <h2>History (Postgres)</h2>
+          <span class="count" id="pg-history-count">—</span>
+          <span class="spacer"></span>
+          <button type="button" id="view-pg-history-btn">View History</button>
+        </header>
+        <div class="body">
+          <div id="pg-history" class="cards">
+            <div class="placeholder">
+              <strong>Postgres-replicated history</strong>
+              <div>Click <em>View History</em> to load from the Express API
+                (<code>GET /history</code>) — the same task events as the
+                live panel, but routed through Pub/Sub → relay → Postgres.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="./main.js?v=8"></script>
   </body>
 </html>
