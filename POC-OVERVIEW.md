@@ -284,6 +284,7 @@ ephemeral/                            (this repo, github.com/turkeydave/ephemera
     build-and-push.ps1                build + push all 7 images at tag m{N}-<sha>
     launch-vm.ps1                     hand-launch one VM (M1 smoketest path; not for prod use)
     preview.ps1                       end-to-end CLI: impersonate, POST, poll, open browser
+    refresh-env.ps1                   git pull + compose restart on a running env (local-dev loop)
 
 c:\Users\kilmo\development\infra\     (sibling repo / dir — NOT in this repo's git)
   README.md
@@ -466,7 +467,96 @@ The cookie name embeds the env_id so multiple parallel envs in one
 browser don't clash; the gateway only checks the cookie matching the
 env_id parsed from the current Host.
 
-### 6.3 The TTL + cleanup path
+### 6.3 Local development against a remote environment
+
+A useful side effect of the architecture: even before the agent runner
+lands in M5, the POC already supports a **local-dev / remote-env**
+loop. An engineer launches an environment once, then iterates on the
+`api` and `app` code locally and refreshes the running VM in seconds —
+no rebuild, no redeploy, no re-launch.
+
+This works because:
+
+- The VM clones the repo to `/srv/ephemeral` at boot, pinned to the
+  branch passed via `preview.ps1 -Branch`.
+- `docker-compose.cloud.yml` bind-mounts the agent-editable services
+  from the cloned tree (matching local dev exactly):
+  - `./api:/app` (rw) — `node index.js` runs against the live source
+  - `./firebase-app/app:/usr/share/nginx/html:ro` — nginx serves the
+    bind-mount per request
+- The other 4 services (`postgres-seeded`, `firebase-emulator-seeded`,
+  `pubsub-relay`, `edge-proxy`) are **not** bind-mounted — they're
+  immutable seeded images and never change between iterations.
+
+The loop:
+
+```diagram
+┌──────────────────┐         ┌────────────────┐
+│ local IDE +      │  edit   │ git push       │
+│ optional agent   │────────▶│ same branch    │
+└────────┬─────────┘         └───────┬────────┘
+         │                            │
+         │ scripts\refresh-env.ps1    │
+         │   -EnvId e-XXXX            │ (origin)
+         ▼                            │
+┌────────────────────────────────────────────┐
+│ gcloud compute ssh ephem-task-XXXX --      │
+│   sudo git -C /srv/ephemeral pull --depth=1│
+│   sudo docker compose restart api          │
+└────────┬───────────────────────────────────┘
+         │
+         ▼
+   browser refresh → new code live (~5–15s end to end)
+```
+
+**Helper**: [`scripts\refresh-env.ps1`](file:///c:/Users/kilmo/development/ephemeral/scripts/refresh-env.ps1)
+
+```powershell
+# default: git pull + restart api
+.\scripts\refresh-env.ps1 -EnvId e-XXXX
+
+# static app change only — pull only, no restart needed
+.\scripts\refresh-env.ps1 -EnvId e-XXXX -Service none
+
+# api/package.json changed — rebuild image then up -d
+.\scripts\refresh-env.ps1 -EnvId e-XXXX -Rebuild
+
+# scp'd files directly out of band — restart only
+.\scripts\refresh-env.ps1 -EnvId e-XXXX -NoPull
+```
+
+Per-service refresh cost (typical):
+
+| Service       | What happens                                              | Wall time |
+| ------------- | --------------------------------------------------------- | --------- |
+| `app`         | nothing — nginx reads new file on next request            | ~0s       |
+| `api`         | `docker compose restart api` against live bind-mount      | ~5–10s    |
+| `api -Rebuild` | `compose build api` + `up -d api` (package.json changed) | ~30–60s   |
+
+What this is **not**:
+
+- It is **not** the agent runner itself — the agent isn't in this POC
+  yet; you're driving the loop manually (or with whatever local agent
+  you choose to point at the cloned repo).
+- It is **not** a hot-reload of the platform services. Postgres seed
+  changes, emulator seed changes, edge-proxy/Caddy config, or
+  pubsub-relay code changes still require a new image push + new env
+  launch (or `terraform apply` for `task_vm_image_tag`).
+- It is **not** branch-switching. The branch was pinned at clone time;
+  switching branches needs a fresh env (or a manual
+  `git fetch && git checkout` SSH session — but that breaks the
+  shallow-clone assumption).
+
+What this **is**:
+
+- A working "I have a long-lived sandbox in the cloud, my IDE/agent
+  edits files locally, the cloud env reflects my changes in seconds"
+  loop.
+- A useful M4-state validation that the bind-mount surface for the
+  agent is wired correctly, ahead of plugging in the real runner in
+  M5.
+
+### 6.4 The TTL + cleanup path
 
 - Dispatcher writes `expires_at = now + ttl_seconds` (default 3600s, max
   86400s) at creation.
@@ -603,6 +693,11 @@ terraform apply
 # Mint an env, wait, open browser
 cd c:\Users\kilmo\development\ephemeral
 .\scripts\preview.ps1
+
+# Local-dev loop: refresh a running env after `git push`
+.\scripts\refresh-env.ps1 -EnvId e-XXXX            # default: pull + restart api
+.\scripts\refresh-env.ps1 -EnvId e-XXXX -Service none   # static app only
+.\scripts\refresh-env.ps1 -EnvId e-XXXX -Rebuild        # api/package.json changed
 
 # List active envs (Firestore)
 gcloud firestore documents list `
