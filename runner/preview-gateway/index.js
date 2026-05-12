@@ -14,13 +14,7 @@
 //   3. If doc.status === "ready" -> proxy to doc.vm_internal_ip:8080.
 //      If doc.status === "launching" -> 503 + Retry-After.
 //      If doc.status === "expired" / "deleted" -> 410.
-//      If doc missing -> see fallback below.
-//
-// Fallback (M2 compatibility): if VM_IP env is set AND the env_id is
-// exactly `smoketest`, proxy to VM_IP:VM_PORT regardless of Firestore.
-// This keeps the original M1/M2 hand-launched VM reachable at
-// `smoketest-app.<lb>.nip.io` while M3 lights up. Drop the fallback once
-// the dispatcher path is proven.
+//      If doc missing -> 404.
 //
 // Routes:
 //   GET /healthz           -> 200 ok                 (LB readiness check)
@@ -30,8 +24,6 @@
 // Required env (in Cloud Run via terraform):
 //   GOOGLE_CLOUD_PROJECT   automatically set by Cloud Run
 // Optional env:
-//   VM_IP                  M2 fallback IP for env_id == "smoketest"
-//   VM_PORT                default 8080
 //   PORT                   Cloud Run injects; default 8080 locally
 //   FIRESTORE_CACHE_MS     per-env_id cache TTL, default 5000
 
@@ -39,8 +31,7 @@ const http = require('http');
 const httpProxy = require('http-proxy');
 const { Firestore } = require('@google-cloud/firestore');
 
-const VM_IP = process.env.VM_IP || '';
-const VM_PORT = parseInt(process.env.VM_PORT || '8080', 10);
+const VM_PORT = 8080;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const CACHE_MS = parseInt(process.env.FIRESTORE_CACHE_MS || '5000', 10);
 const COLLECTION = 'agent_environments';
@@ -161,46 +152,36 @@ async function lookupEnv(envId) {
 
 // --------------------------------------------------------------------------
 // Resolve env_id -> { target, why, expectedToken } or { error: { code, ... } }
-// `expectedToken` is null when the env doesn't require token auth (the
-// smoketest fallback path, or a legacy doc without access_token set).
+// `expectedToken` is null only for legacy docs with no access_token set
+// (predates M4 token gating); new dispatcher-minted envs always have one.
 // --------------------------------------------------------------------------
 async function resolveTarget(envId) {
-  // Firestore wins when present.
-  let doc = null;
+  let doc;
   try {
     doc = await lookupEnv(envId);
   } catch (e) {
     return { error: { code: 502, message: `registry lookup failed: ${e.message}` } };
   }
 
-  if (doc) {
-    const status = doc.status;
-    if (status === 'ready' && doc.vm_internal_ip) {
-      return {
-        target: `http://${doc.vm_internal_ip}:${VM_PORT}`,
-        why: `firestore: status=ready vm=${doc.vm_internal_ip}`,
-        expectedToken: doc.access_token || null,
-      };
-    }
-    if (status === 'launching') {
-      return { error: { code: 503, message: `env ${envId} is still launching`, retryAfter: 5 } };
-    }
-    if (status === 'expired' || status === 'deleted') {
-      return { error: { code: 410, message: `env ${envId} is ${status}` } };
-    }
-    return { error: { code: 502, message: `env ${envId} doc has unexpected status: ${status}` } };
+  if (!doc) {
+    return { error: { code: 404, message: `no environment registered for env_id=${envId}` } };
   }
 
-  // Smoketest fallback for backwards compat with M2. Token-free.
-  if (envId === 'smoketest' && VM_IP) {
+  const status = doc.status;
+  if (status === 'ready' && doc.vm_internal_ip) {
     return {
-      target: `http://${VM_IP}:${VM_PORT}`,
-      why: `smoketest fallback to VM_IP env=${VM_IP}`,
-      expectedToken: null,
+      target: `http://${doc.vm_internal_ip}:${VM_PORT}`,
+      why: `firestore: status=ready vm=${doc.vm_internal_ip}`,
+      expectedToken: doc.access_token || null,
     };
   }
-
-  return { error: { code: 404, message: `no environment registered for env_id=${envId}` } };
+  if (status === 'launching') {
+    return { error: { code: 503, message: `env ${envId} is still launching`, retryAfter: 5 } };
+  }
+  if (status === 'expired' || status === 'deleted') {
+    return { error: { code: 410, message: `env ${envId} is ${status}` } };
+  }
+  return { error: { code: 502, message: `env ${envId} doc has unexpected status: ${status}` } };
 }
 
 // --------------------------------------------------------------------------
@@ -337,7 +318,6 @@ const server = http.createServer(async (req, res) => {
       received_host: host,
       parsed_env_id: envId,
       resolved,
-      smoketest_fallback_vm_ip: VM_IP || null,
       vm_port: VM_PORT,
       cache_ms: CACHE_MS,
       collection: COLLECTION,
@@ -430,7 +410,4 @@ server.on('upgrade', async (req, socket, head) => {
 server.listen(PORT, () => {
   console.log(`[preview-gateway] listening on :${PORT}`);
   console.log(`[preview-gateway] firestore collection=${COLLECTION} cache_ms=${CACHE_MS}`);
-  if (VM_IP) {
-    console.log(`[preview-gateway] smoketest fallback enabled: env_id=smoketest -> ${VM_IP}:${VM_PORT}`);
-  }
 });
