@@ -259,7 +259,12 @@ function escapeHtml(s) {
 async function loadProducts() {
   productsEl.textContent = 'Loading…';
   try {
-    const res = await fetch(`${API_BASE}/products`);
+    // credentials: 'include' so the ephem_token_<env> cookie set by the
+    // preview-gateway on the app origin travels to the api sister origin.
+    // <env>-app and <env>-api are same-site (same eTLD+1 = <ip>.nip.io)
+    // so SameSite=Lax permits this; the cookie's Domain=. parent covers
+    // both subdomains.
+    const res = await fetch(`${API_BASE}/products`, { credentials: 'include' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const { products } = await res.json();
     if (!products || !products.length) {
@@ -291,7 +296,7 @@ viewProductsBtn.addEventListener('click', () => {
 async function loadPgHistory() {
   pgHistoryEl.textContent = 'Loading…';
   try {
-    const res = await fetch(`${API_BASE}/history`);
+    const res = await fetch(`${API_BASE}/history`, { credentials: 'include' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const { history } = await res.json();
     if (!history || !history.length) {

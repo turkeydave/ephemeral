@@ -58,9 +58,64 @@ const proxy = httpProxy.createProxyServer({
 proxy.on('error', (err, req, res) => {
   console.error(`[preview-gateway] proxy error host=${req.headers.host} path=${req.url}: ${err.message}`);
   if (!res.headersSent) {
-    res.writeHead(502, { 'content-type': 'text/plain' });
+    const headers = { 'content-type': 'text/plain' };
+    addCorsHeaders(req, headers);
+    res.writeHead(502, headers);
   }
   res.end(`preview-gateway: upstream error: ${err.message}\n`);
+});
+
+// ----- CORS for cross-origin XHR between sister hostnames -----------------
+// The static `app` calls the Express `api` and the Firestore emulator on
+// sister hostnames (`<env>-api.<lb>.nip.io`, `<env>-firestore.<lb>.nip.io`).
+// These are different *origins* than `<env>-app.<lb>.nip.io`, so the
+// browser does CORS preflight + requires `Access-Control-Allow-Origin`
+// (echoed, not `*`) and `Access-Control-Allow-Credentials: true` on the
+// response — both because the app sends `credentials:'include'` to ride
+// the `ephem_token_<env>` cookie cross-subdomain.
+//
+// We restrict the echo to origins whose env_id matches the request's
+// env_id and whose suffix matches (i.e. only the env's own
+// app/api/firestore subdomains can talk to each other).
+//
+// Strip whatever the API may have set (the api uses `cors()` which
+// returns `*`; that's invalid with credentials, so we override).
+function isSisterOrigin(origin, host) {
+  if (!origin || !host) return false;
+  let originHost;
+  try { originHost = new URL(origin).host.split(':')[0]; }
+  catch { return false; }
+  const hostBare = host.split(':')[0];
+  const originEnv = parseEnvId(originHost);
+  const hostEnv   = parseEnvId(hostBare);
+  if (!originEnv || originEnv !== hostEnv) return false;
+  // Same parent suffix (everything after the first dot) — both must end
+  // up at the same `<lb-ip>.nip.io` parent.
+  const oSuffix = originHost.slice(originHost.indexOf('.'));
+  const hSuffix = hostBare.slice(hostBare.indexOf('.'));
+  return oSuffix === hSuffix;
+}
+
+function addCorsHeaders(req, headers) {
+  const origin = req.headers.origin;
+  const host   = req.headers.host;
+  if (!isSisterOrigin(origin, host)) return;
+  headers['access-control-allow-origin']      = origin;
+  headers['access-control-allow-credentials'] = 'true';
+  headers['vary']                             = 'Origin';
+}
+
+proxy.on('proxyRes', (proxyRes, req) => {
+  const origin = req.headers.origin;
+  const host   = req.headers.host;
+  if (!isSisterOrigin(origin, host)) return;
+  // Override upstream CORS — API uses cors() which returns `*`; not
+  // valid with credentials.
+  delete proxyRes.headers['access-control-allow-origin'];
+  delete proxyRes.headers['access-control-allow-credentials'];
+  proxyRes.headers['access-control-allow-origin']      = origin;
+  proxyRes.headers['access-control-allow-credentials'] = 'true';
+  proxyRes.headers['vary']                             = 'Origin';
 });
 
 // --------------------------------------------------------------------------
@@ -245,6 +300,23 @@ function checkToken(req, host, envId, expectedToken) {
 const server = http.createServer(async (req, res) => {
   const host = req.headers.host || '';
 
+  // CORS preflight: respond directly. We don't even need to resolve the
+  // env — the sister-origin check below covers that. Browsers send these
+  // for any non-simple cross-origin request (custom headers, JSON body,
+  // etc.). Simple GETs without custom headers won't preflight.
+  if (req.method === 'OPTIONS' && req.headers.origin) {
+    const headers = {
+      'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'access-control-allow-headers': req.headers['access-control-request-headers']
+        || 'Content-Type, Authorization',
+      'access-control-max-age': '600',
+      'content-length': '0',
+    };
+    addCorsHeaders(req, headers);
+    res.writeHead(204, headers);
+    return res.end();
+  }
+
   if (req.url === '/healthz') {
     res.writeHead(200, { 'content-type': 'text/plain' });
     return res.end('ok');
@@ -274,7 +346,9 @@ const server = http.createServer(async (req, res) => {
 
   const envId = parseEnvId(host);
   if (!envId) {
-    res.writeHead(400, { 'content-type': 'text/plain' });
+    const headers = { 'content-type': 'text/plain' };
+    addCorsHeaders(req, headers);
+    res.writeHead(400, headers);
     return res.end(`preview-gateway: cannot parse env_id from Host=${host}\n`);
   }
 
@@ -282,13 +356,16 @@ const server = http.createServer(async (req, res) => {
   try {
     result = await resolveTarget(envId);
   } catch (e) {
-    res.writeHead(500, { 'content-type': 'text/plain' });
+    const headers = { 'content-type': 'text/plain' };
+    addCorsHeaders(req, headers);
+    res.writeHead(500, headers);
     return res.end(`preview-gateway: resolution error: ${e.message}\n`);
   }
 
   if (result.error) {
     const headers = { 'content-type': 'text/plain' };
     if (result.error.retryAfter) headers['retry-after'] = String(result.error.retryAfter);
+    addCorsHeaders(req, headers);
     res.writeHead(result.error.code, headers);
     return res.end(`preview-gateway: ${result.error.message}\n`);
   }
@@ -296,15 +373,19 @@ const server = http.createServer(async (req, res) => {
   // M4: token check.
   const auth = checkToken(req, host, envId, result.expectedToken);
   if (!auth.ok) {
-    res.writeHead(auth.code, { 'content-type': 'text/plain' });
+    const headers = { 'content-type': 'text/plain' };
+    addCorsHeaders(req, headers);
+    res.writeHead(auth.code, headers);
     return res.end(`preview-gateway: ${auth.message}\n`);
   }
   if (auth.redirect) {
-    res.writeHead(302, {
-      'location':   auth.redirect.location,
-      'set-cookie': auth.redirect.cookie,
+    const headers = {
+      'location':      auth.redirect.location,
+      'set-cookie':    auth.redirect.cookie,
       'cache-control': 'no-store',
-    });
+    };
+    addCorsHeaders(req, headers);
+    res.writeHead(302, headers);
     return res.end();
   }
 
