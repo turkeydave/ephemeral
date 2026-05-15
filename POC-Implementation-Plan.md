@@ -170,18 +170,26 @@ checked-out repos" requirement.
 
 ### How each "seeded" image works
 
-**`postgres-seeded`** — simplest possible:
+**`postgres-seeded`** — multi-stage `pg_dump` bake:
 
 ```dockerfile
+# Stage 1: spin up postgres in the build, apply postgres/init/*.sql,
+#          then pg_dump the result into a single plain-SQL file.
+FROM postgres:16-alpine AS dump-builder
+# ... initdb + pg_ctl start + psql -f init/*.sql + pg_dump --file=/tmp/dump/seed.sql ...
+
+# Stage 2: ship the dump as the only init script.
 FROM postgres:16-alpine
-COPY postgres/init/ /docker-entrypoint-initdb.d/
+COPY --from=dump-builder /tmp/dump/seed.sql /docker-entrypoint-initdb.d/00-seed.sql
 ```
 
-Each fresh container starts with an empty `pgdata` and runs the init
-scripts on boot. Same behavior we get locally today, but the SQL is in
-the image so no host bind-mount is needed on the VM. (If we ever outgrow
-this — e.g. seed gets large or slow to apply — switch to baking a
-`pg_dump` tarball that the entrypoint restores on first boot.)
+Each fresh container starts with an empty `pgdata` and the standard
+postgres entrypoint replays `00-seed.sql` via `psql`. The init SQL
+scripts only ever execute *inside the build* — at runtime we just
+restore a pre-rendered dump, which is cheaper for large seeds and
+sidesteps any runtime cost of the original SQL (extension creation,
+data generation, etc.). The local docker-compose.yml flow keeps
+bind-mounting `postgres/init/` so dev iteration on the SQL stays cheap.
 
 **`firebase-emulator-seeded`** — extend the existing
 [`firebase-emulator/Dockerfile`](../firebase-emulator/Dockerfile) to also
